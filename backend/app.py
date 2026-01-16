@@ -6,12 +6,9 @@ from app_akinator import app as akinator_app
 from app_moviegrid import app as moviegrid_app
 from app_blindtest import app as blindtest_app
 
-# Frontend GitHub Pages origin
 FRONTEND_ORIGIN = "https://origanire.github.io"
 
 root = Flask(__name__)
-
-# CORS for root routes (/ and /health)
 CORS(root, resources={r"/*": {"origins": [FRONTEND_ORIGIN]}})
 
 @root.get("/")
@@ -30,12 +27,11 @@ def home():
 def health():
     return jsonify({"status": "ok"})
 
-# CORS for sub-apps (important: each Flask app needs its own CORS config)
+# applique CORS à chaque sous-app
 CORS(akinator_app, resources={r"/*": {"origins": [FRONTEND_ORIGIN]}})
 CORS(moviegrid_app, resources={r"/*": {"origins": [FRONTEND_ORIGIN]}})
 CORS(blindtest_app, resources={r"/*": {"origins": [FRONTEND_ORIGIN]}})
 
-# WSGI app mounted for gunicorn: app:app
 app = DispatcherMiddleware(root, {
     "/akinator": akinator_app,
     "/moviegrid": moviegrid_app,
