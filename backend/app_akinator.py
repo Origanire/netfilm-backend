@@ -247,48 +247,47 @@ def _next_step(state, questions, session):
 
 @app.post("/confirm")
 def confirm_guess():
-    """Confirme ou rejette le film proposé"""
     try:
         data = request.get_json(silent=True) or {}
         gid = data.get("game_id")
-        confirmed = data.get("confirmed")  # True si "Oui", False si "Non"
+        confirmed = data.get("confirmed")
 
-        if not gid:
-            return jsonify({"error": "game_id manquant"}), 400
-        if gid not in game_state:
-            return jsonify({"error": "Partie non trouvée"}), 404
-
+        if not gid or gid not in game_state:
+            return jsonify({"error": "game_id manquant ou invalide"}), 400
         if not isinstance(confirmed, bool):
             return jsonify({"error": "confirmed doit être true ou false"}), 400
 
         session = game_state[gid]
         state = session["state"]
 
-        # Si confirmation = Oui
+        # Si confirmation = Oui → FIN DU JEU
         if confirmed:
-            film = state.candidates[0]
+            film = state.candidates[0] if state.candidates else {}
             return jsonify({
                 "finished": True,
                 "guess": film.get("title", "Inconnu"),
                 "message": "Bien joué! 🎬"
             }), 200
 
-        # Sinon = Non → Supprimer ce film et CONTINUER LES QUESTIONS
+        # Sinon = Non → REJETER CE FILM ET CONTINUER
         if state.candidates:
             state.candidates = state.candidates[1:]
+            sort_candidates(state)  # ← IMPORTANT: retrier !
 
+        # Si VRAIMENT plus de candidats
         if not state.candidates:
             return jsonify({
                 "finished": True,
                 "guess": "Désolé, j'ai échoué! 😅"
             }), 200
 
+        # CONTINUER AVEC DES QUESTIONS (pas proposer un autre film tout de suite)
         conn = open_db()
         try:
             load_genres(conn)
             questions = default_questions(conn)
 
-            # Poser la PROCHAINE QUESTION (pas proposer un autre film)
+            # Chercher une bonne prochaine question
             q2 = choose_best_question(
                 state.candidates,
                 questions,
@@ -298,20 +297,28 @@ def confirm_guess():
             )
 
             if q2 is None:
+                # Plus de questions disponibles, proposer le nouveau top film
                 if state.candidates:
+                    film = state.candidates[0]
+                    session["proposed_film_id"] = film.get("id")
+                    return jsonify({
+                        "finished": False,
+                        "asking_confirmation": True,
+                        "guess": film.get("title", "Inconnu"),
+                        "guess_id": film.get("id"),
+                        "confirmation_options": ["Oui, c'est ça!", "Non, continuer"]
+                    }), 200
+                else:
                     return jsonify({
                         "finished": True,
-                        "guess": state.candidates[0].get("title", "Inconnu")
+                        "guess": "Désolé, j'ai échoué! 😅"
                     }), 200
-                return jsonify({
-                    "finished": True,
-                    "guess": "Désolé, j'ai échoué! 😅"
-                }), 200
 
+            # Poser la prochaine question (pas proposer un film)
             session["current_qkey"] = q2.key
-
             return jsonify({
                 "finished": False,
+                "asking_confirmation": False,  # ← IMPORTANT: pas de confirmation
                 "question": q2.text,
                 "question_key": q2.key,
                 "options": OPTIONS_UI
@@ -322,7 +329,6 @@ def confirm_guess():
 
     except Exception as e:
         return internal_error("confirm_guess", e)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)
