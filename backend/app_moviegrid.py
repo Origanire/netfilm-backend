@@ -22,7 +22,7 @@ TMDB_API_KEY = os.getenv('TMDB_API_KEY', 'a46949b0732719a510a26fd7c0a1a3ae')
 def home():
     return "Bienvenue sur l'API MovieGrid !"
 
-@app.route('verify-movie', methods=['POST'])
+@app.route('/verify-movie', methods=['POST'])
 def verify_movie():
     """Vérifie si un film correspond aux deux critères donnés"""
     try:
