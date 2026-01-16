@@ -96,7 +96,7 @@ def health():
     return jsonify({"status": "ok", "service": "Akinator API", "db": db_path()}), 200
 
 
-@app.post("/akinator/start")
+@app.post("/start")
 def start_game():
     try:
         conn = open_db()
@@ -143,7 +143,7 @@ def start_game():
         return internal_error("start_game", e)
 
 
-@app.post("/akinator/answer")
+@app.post("/answer")
 def answer():
     try:
         data = request.get_json(silent=True) or {}
@@ -245,7 +245,7 @@ def _next_step(state, questions, session):
     }), 200
 
 
-@app.post("/akinator/confirm")
+@app.post("/confirm")
 def confirm_guess():
     """Confirme ou rejette le film proposé"""
     try:

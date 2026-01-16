@@ -22,7 +22,7 @@ TMDB_API_KEY = os.getenv('TMDB_API_KEY', 'a46949b0732719a510a26fd7c0a1a3ae')
 def home():
     return "Bienvenue sur l'API MovieGrid !"
 
-@app.route('/moviegrid/verify-movie', methods=['POST'])
+@app.route('verify-movie', methods=['POST'])
 def verify_movie():
     """Vérifie si un film correspond aux deux critères donnés"""
     try:
@@ -101,7 +101,7 @@ def check_criterion(movie, criterion):
     return False
 
 
-@app.route('/moviegrid/search-movies', methods=['GET'])
+@app.route('/search-movies', methods=['GET'])
 def search_movies():
     """Recherche des films par titre"""
     query = request.args.get('query', '')
@@ -129,7 +129,7 @@ def search_movies():
         return jsonify({'error': 'Failed to search movies'}), 500
 
 
-@app.route('/moviegrid/get-solutions', methods=['POST'])
+@app.route('/get-solutions', methods=['POST'])
 def get_solutions():
     """Récupère les solutions possibles pour une combinaison de critères"""
     try:
