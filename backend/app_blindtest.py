@@ -4,9 +4,17 @@ import random
 import requests
 import os
 
+
 app = Flask(__name__)
-origin = os.getenv("ALLOWED_ORIGIN", "https://origanire.github.io")
-CORS(app, resources={r"/*": {"origins": [origin]}})
+
+CORS(app, resources={
+    r"/*": {
+        "origins": ["https://origanire.github.io"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+    }
+})
+
 
 @app.route("/", methods=["GET"])
 def home():

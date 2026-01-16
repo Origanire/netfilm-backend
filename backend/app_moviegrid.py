@@ -4,8 +4,15 @@ import requests
 import os
 
 app = Flask(__name__)
-origin = os.getenv("ALLOWED_ORIGIN", "https://origanire.github.io")
-CORS(app, resources={r"/*": {"origins": [origin]}})
+
+CORS(app, resources={
+    r"/*": {
+        "origins": ["https://origanire.github.io"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+    }
+})
+
 
 # Clé API TMDB - À configurer dans les variables d'environnement
 TMDB_API_KEY = os.getenv('TMDB_API_KEY', 'a46949b0732719a510a26fd7c0a1a3ae')
