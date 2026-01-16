@@ -109,6 +109,7 @@ def get_data():
     return jsonify({"message": "Hello from Flask!"})
 
 @app.route('/api/quiz/random', methods=['GET'])
+@app.route('/quiz/random', methods=['GET'])
 def get_random_quiz():
     """Retourne une question de blind test aléatoire"""
     difficulty = request.args.get('difficulty', None)
@@ -133,11 +134,13 @@ def get_random_quiz():
     })
 
 @app.route('/api/quiz/all', methods=['GET'])
+@app.route('/quiz/all', methods=['GET'])
 def get_all_quiz():
     """Retourne toutes les questions de blind test"""
     return jsonify(SOUNDTRACKS)
 
 @app.route('/api/quiz/<int:quiz_id>/answer', methods=['POST'])
+@app.route('/quiz/<int:quiz_id>/answer', methods=['POST'])
 def check_answer(quiz_id):
     """Vérifie la réponse donnée"""
     data = request.json
@@ -162,6 +165,7 @@ def check_answer(quiz_id):
     })
 
 @app.route('/api/quiz/random-set', methods=['GET'])
+@app.route('/quiz/random-set', methods=['GET'])
 def get_random_set():
     """Retourne un set de 10 questions aléatoires pour un blind test complet"""
     num_questions = request.args.get('count', 10, type=int)
@@ -187,6 +191,7 @@ def get_random_set():
     } for q in questions])
 
 @app.route('/api/stats', methods=['POST'])
+@app.route('/stats', methods=['POST'])
 def save_stats():
     """Sauvegarde les statistiques du joueur"""
     data = request.json
@@ -205,6 +210,7 @@ def save_stats():
     })
 
 @app.route('/api/audio/<int:quiz_id>', methods=['GET'])
+@app.route('/audio/<int:quiz_id>', methods=['GET'])
 def get_audio(quiz_id):
     """Serve audio files for soundtracks"""
     # Chercher la question
