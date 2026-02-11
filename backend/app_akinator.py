@@ -7,6 +7,32 @@ import traceback
 from pathlib import Path
 from typing import Dict, Any
 
+# ==============================
+# CHARGEMENT DU FICHIER .env
+# ==============================
+def load_env_file():
+    """Charge le fichier .env manuellement (sans dépendance python-dotenv)."""
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        print(f"⚠️  Fichier .env non trouvé: {env_path}")
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            # Ignorer les commentaires et lignes vides
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                # Ne pas écraser les variables déjà définies dans l'environnement
+                if key and value and key not in os.environ:
+                    os.environ[key] = value
+
+load_env_file()
+# ==============================
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
