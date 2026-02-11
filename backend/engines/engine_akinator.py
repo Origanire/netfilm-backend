@@ -1032,14 +1032,14 @@ def default_questions(conn: sqlite3.Connection) -> List[Question]:
         
         # LANGUE ORIGINALE - EXCLUSION MUTUELLE TOTALE
         # Dès qu'on répond "oui" à une langue, toutes les autres sont exclues
-        Question("language_en", "La langue originale est-elle l'anglais ?", pred_language("en")),
-        Question("language_fr", "La langue originale est-elle le français ?", pred_language("fr")),
-        Question("language_ja", "La langue originale est-elle le japonais ?", pred_language("ja")),
-        Question("language_es", "La langue originale est-elle l'espagnol ?", pred_language("es")),
-        Question("language_de", "La langue originale est-elle l'allemand ?", pred_language("de")),
-        Question("language_it", "La langue originale est-elle l'italien ?", pred_language("it")),
-        Question("language_ko", "La langue originale est-elle le coréen ?", pred_language("ko")),
-        Question("language_zh", "La langue originale est-elle le chinois ?", pred_language("zh")),
+        Question("language_en", "La langue originale est-elle l'anglais ?o", pred_language("en")),
+        Question("language_fr", "La langue originale est-elle le français ?o", pred_language("fr")),
+        Question("language_ja", "La langue originale est-elle le japonais ?o", pred_language("ja")),
+        Question("language_es", "La langue originale est-elle l'espagnol ?o", pred_language("es")),
+        Question("language_de", "La langue originale est-elle l'allemand ?o", pred_language("de")),
+        Question("language_it", "La langue originale est-elle l'italien ?o", pred_language("it")),
+        Question("language_ko", "La langue originale est-elle le coréen ?o", pred_language("ko")),
+        Question("language_zh", "La langue originale est-elle le chinois ?o", pred_language("zh")),
 
         # SUCCÈS / POPULARITÉ
         Question("popular", "Est-ce que c'est un film très populaire ?", pred_popularity_ge(50)),
