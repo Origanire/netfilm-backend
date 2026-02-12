@@ -282,7 +282,7 @@ class Question:
         # OPTIMISATION: Sur grande liste, échantillonner pour calculer plus vite
         sample = candidates
         if len(candidates) > 500:
-            sample = candidates[:500]  # Prendre les 500 premiers (déjà triés par score)
+            sample = candidates[:500]
         
         yes, no, unk = split_counts(sample, self.predicate)
 
@@ -293,26 +293,43 @@ class Question:
 
         n = len(sample)
         unk_ratio = (unk / n) if n else 1.0
-        score = base - 0.35 * unk_ratio
+        # AMÉLIORATION: pénalité plus forte sur unk (données manquantes = moins fiable)
+        score = base - 0.5 * unk_ratio
 
-        # boosters (garde l'esprit de ton code)
-        # PRIORITÉ 1: Questions de VALIDATION du TOP candidat (ULTRA prioritaires)
-        if self.key.startswith("validate_"):
-            score *= 50.0  # ULTRA BOOST pour valider/éliminer le #1 rapidement
-        # PRIORITÉ 2: Questions de langue (posées EN PREMIER)
-        elif self.key.startswith("language_"):
-            score *= 100.0  # MEGA BOOST pour forcer les questions de langue en premier
+        # HIÉRARCHIE des boosters - du plus fort au plus faible
+        # PRIORITÉ 0: Questions de langue (posées EN PREMIER, toujours)
+        if self.key.startswith("language_"):
+            score *= 120.0  # MEGA BOOST absolu
+        # PRIORITÉ 1: Questions de VALIDATION du TOP candidat (ultra prioritaires)
+        elif self.key.startswith("validate_"):
+            # AMÉLIORATION: boost adaptatif selon la taille du pool
+            if n <= 20:
+                score *= 80.0   # Très peu de candidats = validation critique
+            elif n <= 50:
+                score *= 60.0
+            else:
+                score *= 40.0
+        # PRIORITÉ 2: Réalisateurs (très discriminants)
         elif self.key.startswith(("director_", "dyn_director_")):
+            score *= 2.0
+        # PRIORITÉ 3: Franchises (exclusives)
+        elif self.key.startswith("franchise_"):
+            score *= 1.8
+        # PRIORITÉ 4: Personnages
+        elif self.key.startswith("char_"):
             score *= 1.5
-        elif self.key.startswith(("franchise_",)):
-            score *= 1.6  # Augmenté de 1.4 à 1.6 pour mieux détecter les franchises
-        elif self.key.startswith(("char_",)):
-            score *= 1.35
+        # PRIORITÉ 5: Acteurs
         elif self.key.startswith(("actor_", "dyn_actor_")):
             if 0 < yes < n:
+                score *= 1.4
+        # PRIORITÉ 6: Mots-clés dynamiques (très utiles sur petit pool)
+        elif self.key.startswith("dyn_keyword_"):
+            if n <= 30:
                 score *= 1.3
+        # PRIORITÉ 7: Localisation/Événement/Objet
         elif self.key.startswith(("location_", "event_", "object_")):
             score *= 1.25
+        # JOKER titre: seulement utile sur petit pool
         elif self.key.startswith("joker_title_") and n <= 10:
             score *= 1.2
 
@@ -401,7 +418,7 @@ def choose_best_question(candidates: List[dict], questions: List[Question], aske
     """
     Choisit la meilleure question de manière déterministe et RAPIDE.
     OPTIMISATION: Échantillonne si trop de questions pour éviter de tout scorer.
-    AMÉLIORATION: Ajoute de l'aléatoire sur la première question.
+    AMÉLIORATION: Aléatoire sur la première question + pénalité de diversité allégée.
     """
     contradictions = {
         "big_budget": "small_budget",
@@ -438,18 +455,20 @@ def choose_best_question(candidates: List[dict], questions: List[Question], aske
         return None
     
     # OPTIMISATION CRITIQUE: Si trop de questions, échantillonner pour scorer plus vite
-    if len(valid_questions) > 150:
-        # Prendre les 150 premières (déjà triées par priorité généralement)
-        valid_questions = valid_questions[:150]
+    if len(valid_questions) > 200:
+        # Priorité aux questions validate_ et language_ avant d'échantillonner
+        priority_qs = [q for q in valid_questions if q.key.startswith(("validate_", "language_"))]
+        rest = [q for q in valid_questions if not q.key.startswith(("validate_", "language_"))]
+        valid_questions = priority_qs + rest[:200 - len(priority_qs)]
 
     scored: List[Tuple[Question, float]] = []
     for q in valid_questions:
-        # NOUVEAU: Vérifier si on doit pénaliser pour diversité
         s = q.score(candidates)
         if s > 0:
-            # Pénaliser FORTEMENT si trop de questions du même type récemment
-            if state and should_diversify(state, q, max_consecutive=2):
-                s *= 0.01  # Pénalité EXTRÊME (99% de réduction) pour forcer variété
+            # AMÉLIORATION: Pénalité de diversité moins agressive (0.1 au lieu de 0.01)
+            # pour ne pas bloquer des questions pertinentes
+            if state and should_diversify(state, q, max_consecutive=3):
+                s *= 0.1  # Pénalité modérée (90% de réduction)
             
             scored.append((q, s))
 
@@ -458,11 +477,10 @@ def choose_best_question(candidates: List[dict], questions: List[Question], aske
 
     scored.sort(key=lambda x: x[1], reverse=True)
     
-    # AMÉLIORATION: Aléatoire sur la première question (top 5 au lieu de toujours la #1)
-    if is_first_question and len(scored) >= 5:
-        # Choisir aléatoirement parmi les 5 meilleures questions
-        top_5 = scored[:5]
-        return random.choice(top_5)[0]
+    # AMÉLIORATION: Aléatoire sur la première question (top 3 au lieu de top 5)
+    if is_first_question and len(scored) >= 3:
+        top_3 = scored[:3]
+        return random.choice(top_3)[0]
     
     return scored[0][0]
 
@@ -921,7 +939,7 @@ def pred_not_saga(conn: sqlite3.Connection) -> Callable[[dict], Optional[bool]]:
 # =========================
 
 def pred_keyword(conn: sqlite3.Connection, keyword: str) -> Callable[[dict], Optional[bool]]:
-    k = keyword.lower()
+    k = keyword.lower().strip()
     def p(m: dict) -> Optional[bool]:
         mid = movie_id(m)
         if mid is None:
@@ -929,8 +947,16 @@ def pred_keyword(conn: sqlite3.Connection, keyword: str) -> Callable[[dict], Opt
         keywords = get_details(conn, mid).get("keywords", {}).get("keywords", [])
         if not isinstance(keywords, list):
             return None
-        names = [kw.get("name", "").lower() for kw in keywords if isinstance(kw, dict)]
-        return k in " ".join(names)
+        names = [kw.get("name", "").lower().strip() for kw in keywords if isinstance(kw, dict)]
+        if not names:
+            return None
+        # AMÉLIORATION: correspondance exacte d'abord, puis partielle
+        if k in names:
+            return True
+        # Correspondance partielle uniquement si keyword assez long (évite faux positifs)
+        if len(k) >= 4:
+            return any(k in name or name in k for name in names)
+        return False
     return p
 
 def pred_is_adaptation(conn: sqlite3.Connection) -> Callable[[dict], Optional[bool]]:
@@ -1165,16 +1191,17 @@ def build_top_validation_questions(
     asked: Set[str],
 ) -> List[Question]:
     """
-    NOUVEAU: Génère des questions SPÉCIFIQUES au film #1 pour le valider/éliminer rapidement.
+    Génère des questions SPÉCIFIQUES au film #1 pour le valider/éliminer rapidement.
     
     Stratégie: Au lieu d'éliminer 149 autres films, on pose des questions sur le #1:
     - Si réponse OUI → Le #1 se confirme
     - Si réponse NON → Le #1 est ÉLIMINÉ immédiatement !
     
-    Beaucoup plus rapide !
+    AMÉLIORÉ: Active dès 10 candidats (au lieu de 50) pour converger plus vite.
     """
-    if len(candidates) < 50 or len(candidates) > 200:
-        return []  # Seulement quand 50-200 candidats
+    # AMÉLIORATION: Plage élargie - actif dès 10 candidats jusqu'à 500
+    if len(candidates) < 10 or len(candidates) > 500:
+        return []
     
     top = candidates[0]
     mid = movie_id(top)
@@ -1184,19 +1211,7 @@ def build_top_validation_questions(
     questions: List[Question] = []
     details = get_details(conn, mid)
     
-    # 1. ACTEURS PRINCIPAUX du film #1
-    cast = details.get("credits", {}).get("cast", [])
-    if isinstance(cast, list):
-        for actor in cast[:5]:  # Top 5 acteurs
-            if isinstance(actor, dict):
-                name = actor.get("name", "").strip()
-                if name:
-                    key = f"validate_actor_{name.replace(' ', '_').lower()}"
-                    if key not in asked:
-                        text = f"[VALIDATION #1] Est-ce que {name} joue dedans ?"
-                        questions.append(Question(key, text, pred_actor_in_cast(conn, name)))
-    
-    # 2. RÉALISATEUR du film #1
+    # 1. RÉALISATEUR du film #1 (en premier - très discriminant)
     crew = details.get("credits", {}).get("crew", [])
     if isinstance(crew, list):
         for person in crew:
@@ -1205,40 +1220,77 @@ def build_top_validation_questions(
                 if name:
                     key = f"validate_director_{name.replace(' ', '_').lower()}"
                     if key not in asked:
-                        text = f"[VALIDATION #1] Est-ce réalisé par {name} ?"
+                        text = f"Est-ce réalisé par {name} ?"
                         questions.append(Question(key, text, pred_has_director(conn, name)))
-                    break
+                break
     
-    # 3. KEYWORDS SPÉCIFIQUES du film #1
-    keywords = details.get("keywords", {}).get("keywords", [])
-    if isinstance(keywords, list):
-        for kw in keywords[:10]:  # Top 10 keywords
-            if isinstance(kw, dict):
-                name = kw.get("name", "").strip().lower()
+    # 2. ACTEURS PRINCIPAUX du film #1 (top 3 seulement = plus précis)
+    cast = details.get("credits", {}).get("cast", [])
+    if isinstance(cast, list):
+        for actor in cast[:3]:  # Top 3 acteurs seulement
+            if isinstance(actor, dict):
+                name = actor.get("name", "").strip()
                 if name:
-                    key = f"validate_keyword_{name.replace(' ', '_')}"
+                    key = f"validate_actor_{name.replace(' ', '_').lower()}"
                     if key not in asked:
-                        text = f"[VALIDATION #1] Le film contient-il '{name}' ?"
-                        questions.append(Question(key, text, pred_keyword(conn, name)))
+                        text = f"Est-ce que {name} joue dedans ?"
+                        questions.append(Question(key, text, pred_actor_in_cast(conn, name)))
     
-    # 4. ANNÉE EXACTE du film #1
+    # 3. ANNÉE EXACTE du film #1
     year = safe_year(top.get("release_date"))
     if year:
         key = f"validate_year_{year}"
         if key not in asked:
-            text = f"[VALIDATION #1] Est-ce sorti en {year} ?"
+            text = f"Est-ce sorti en {year} ?"
             questions.append(Question(key, text, pred_exact_year(year)))
     
-    # 5. TITRE du film #1 (première lettre)
-    title = str(top.get("title", "")).strip()
-    if title:
-        first_letter = title[0].upper()
-        key = f"validate_title_{first_letter}"
-        if key not in asked:
-            text = f"[VALIDATION #1] Le titre commence-t-il par '{first_letter}' ?"
-            questions.append(Question(key, text, pred_title_starts_with(first_letter)))
+    # 4. KEYWORDS DISTINCTIFS du film #1 (top 5 les plus rares dans le pool)
+    keywords = details.get("keywords", {}).get("keywords", [])
+    if isinstance(keywords, list) and len(candidates) <= 100:
+        # Calculer la rareté de chaque keyword dans le pool
+        from collections import Counter
+        pool_kw_counter: Counter = Counter()
+        for cand in candidates[:50]:  # Limiter pour perf
+            cand_mid = movie_id(cand)
+            if cand_mid and cand_mid != mid:
+                cand_kws = get_details(conn, cand_mid).get("keywords", {}).get("keywords", [])
+                if isinstance(cand_kws, list):
+                    for kw in cand_kws:
+                        if isinstance(kw, dict):
+                            pool_kw_counter[kw.get("name", "").lower().strip()] += 1
+        
+        # Choisir les keywords du top film les plus RARES dans le pool (= plus discriminants)
+        rare_keywords = []
+        for kw in keywords[:15]:
+            if isinstance(kw, dict):
+                name = kw.get("name", "").lower().strip()
+                if name and len(name) >= 4:
+                    freq = pool_kw_counter.get(name, 0)
+                    rare_keywords.append((name, freq))
+        
+        # Trier par fréquence croissante (les plus rares en premier)
+        rare_keywords.sort(key=lambda x: x[1])
+        
+        for kw_name, freq in rare_keywords[:5]:
+            key = f"validate_keyword_{kw_name.replace(' ', '_')}"
+            if key not in asked:
+                text = f"Le film est-il lié à '{kw_name}' ?"
+                questions.append(Question(key, text, pred_keyword(conn, kw_name)))
     
-    return questions[:15]  # Max 15 questions de validation
+    # 5. COLLECTION / FRANCHISE du film #1
+    collection = details.get("belongs_to_collection")
+    if collection:
+        col_name = str(collection.get("name", "")).strip()
+        if col_name:
+            # Extraire le nom court de la franchise
+            short_name = col_name.replace(" Collection", "").replace(" Franchise", "").strip()
+            if short_name:
+                key = f"validate_franchise_{short_name.replace(' ', '_').lower()}"
+                if key not in asked:
+                    text = f"Le film fait-il partie de la franchise '{short_name}' ?"
+                    questions.append(Question(key, text, pred_franchise_name(conn, short_name.lower())))
+    
+    return questions[:20]  # Max 20 questions de validation
 
 
 def build_dynamic_keyword_questions(
@@ -1249,13 +1301,21 @@ def build_dynamic_keyword_questions(
 ) -> List[Question]:
     """
     Questions dynamiques basées sur les keywords les plus fréquents dans le pool.
-    STRICT MODE: Génère BEAUCOUP plus de questions pour affiner.
+    AMÉLIORÉ: Filtre les keywords trop génériques, génère plus sur petit pool.
     """
     from collections import Counter
     
-    # STRICT MODE: Générer même avec plus de candidats
-    if len(candidates) > 200:  # Augmenté de 100 à 200
+    if len(candidates) > 300:
         return []
+
+    # Keywords trop génériques à ignorer (ne discriminent pas bien)
+    GENERIC_KEYWORDS = {
+        "based on novel", "based on book", "based on short story",
+        "independent film", "cult film", "blockbuster",
+        "sequel", "prequel", "reboot",
+        "female protagonist", "male protagonist",
+        "based on true story",  # gardé dans les questions statiques
+    }
 
     keyword_counter: Counter = Counter()
     for m in candidates:
@@ -1267,28 +1327,42 @@ def build_dynamic_keyword_questions(
             for kw in kws:
                 if isinstance(kw, dict):
                     name = kw.get("name", "").strip().lower()
-                    if name:
+                    if name and name not in GENERIC_KEYWORDS and len(name) >= 3:
                         keyword_counter[name] += 1
 
     questions: List[Question] = []
+    n = len(candidates)
     
-    # STRICT MODE: Augmenter top_k si peu de candidats
+    # AMÉLIORÉ: top_k adaptatif selon la taille du pool
     actual_top_k = top_k
-    if len(candidates) <= 10:
-        actual_top_k = 200  # Beaucoup plus de questions
-    elif len(candidates) <= 30:
+    if n <= 5:
+        actual_top_k = 300   # Quasi illimité sur très petit pool
+    elif n <= 10:
+        actual_top_k = 200
+    elif n <= 30:
         actual_top_k = 150
-    elif len(candidates) <= 50:
+    elif n <= 50:
         actual_top_k = 120
+    elif n <= 100:
+        actual_top_k = 100
     
     for kw, count in keyword_counter.most_common(actual_top_k):
-        # STRICT MODE: Accepter même 1 seul film avec ce keyword (au lieu de 2)
         if count < 1:
             continue
+        
+        # AMÉLIORATION: Sur un grand pool, n'inclure que les keywords qui discriminent bien
+        # (ni trop rares = 1 film, ni trop communs = >80% des films)
+        if n >= 50:
+            ratio = count / n
+            if count < 2:  # Trop rare sur grand pool
+                continue
+            if ratio > 0.85:  # Trop commun = ne discrimine pas
+                continue
+        
         key = f"dyn_keyword_{kw.replace(' ', '_')}"
         if key in asked:
             continue
-        text = f"Le film contient-il le thème/keyword '{kw}' ?"
+        text = f"Le film est-il lié au thème '{kw}' ?"
         questions.append(Question(key, text, pred_keyword(conn, kw)))
 
     return questions
@@ -1598,21 +1672,21 @@ def build_dynamic_questions(
 ) -> List[Question]:
     """
     Questions dynamiques basées sur acteurs/réalisateurs fréquents dans le pool.
-    SMART MODE: Filtre les acteurs selon la langue dominante des candidats.
+    AMÉLIORÉ: Filtre intelligent + plus de candidats acceptés.
     """
     from collections import Counter
     
-    # STRICT MODE: Générer même avec plus de candidats
-    if len(candidates) > 200:  # Augmenté de 100 à 200
+    if len(candidates) > 300:
         return []
 
-    # NOUVEAU: Détecter la langue dominante
+    # Détecter la langue dominante
     dominant_language = detect_dominant_language(candidates)
     dominant_decade = detect_dominant_decade(candidates)
     relevant_actor_set = set(get_relevant_actors(dominant_language, dominant_decade))
     
     actor_counter: Counter = Counter()
     director_counter: Counter = Counter()
+    n = len(candidates)
 
     for m in candidates:
         mid = movie_id(m)
@@ -1623,8 +1697,8 @@ def build_dynamic_questions(
         crew = d.get("credits", {}).get("crew", [])
 
         if isinstance(cast, list):
-            # STRICT MODE: Regarder TOUS les acteurs (pas juste top 5)
-            max_actors = 15 if len(candidates) <= 20 else 10
+            # AMÉLIORÉ: top 10 acteurs sur petit pool, top 7 sur grand
+            max_actors = 10 if n <= 30 else 7
             for c in cast[:max_actors]:
                 if isinstance(c, dict):
                     name = c.get("name", "").strip()
@@ -1640,24 +1714,31 @@ def build_dynamic_questions(
 
     questions: List[Question] = []
     
-    # STRICT MODE: Augmenter top_k si peu de candidats
+    # top_k adaptatif selon la taille du pool
     actual_top_k = top_k
-    if len(candidates) <= 10:
+    if n <= 5:
+        actual_top_k = 300
+    elif n <= 10:
         actual_top_k = 150
-    elif len(candidates) <= 30:
+    elif n <= 30:
         actual_top_k = 120
-    elif len(candidates) <= 50:
+    elif n <= 50:
         actual_top_k = 100
+    elif n <= 100:
+        actual_top_k = 80
 
-    # NOUVEAU: Filtrer les acteurs selon la langue dominante
+    # Filtrer les acteurs selon la langue dominante
     for actor, count in actor_counter.most_common(actual_top_k):
-        # STRICT MODE: Accepter même 1 seul film (au lieu de 2)
         if count < 1:
             continue
         
-        # SMART FILTER: Vérifier si l'acteur correspond à la langue dominante
+        # Sur grand pool, exiger au moins 2 films (pour éviter les questions inutiles)
+        if n >= 50 and count < 2:
+            continue
+        
+        # Filtre de langue
         if not should_include_actor(actor, dominant_language, relevant_actor_set):
-            continue  # Skip cet acteur s'il ne correspond pas
+            continue
         
         key = f"dyn_actor_{actor.replace(' ', '_').lower()}"
         if key in asked:
@@ -1665,9 +1746,11 @@ def build_dynamic_questions(
         text = f"Est-ce que {actor} joue dedans ?"
         questions.append(Question(key, text, pred_actor_in_cast(conn, actor)))
 
+    # Réalisateurs: toujours inclure (très discriminants)
     for director, count in director_counter.most_common(actual_top_k):
-        if count < 1:  # STRICT MODE: 1 au lieu de 2
+        if count < 1:
             continue
+        
         key = f"dyn_director_{director.replace(' ', '_').lower()}"
         if key in asked:
             continue
@@ -1718,9 +1801,125 @@ def build_dynamic_year_questions(
     return questions
 
 
-# =========================
-# Engine state
-# =========================
+def build_binary_disambiguation_questions(
+    conn: sqlite3.Connection,
+    candidates: List[dict],
+    asked: Set[str],
+) -> List[Question]:
+    """
+    NOUVEAU: Génère des questions ultra-précises pour désambiguïser un très petit pool.
+    Activé quand il reste 2 à 15 films: crée des questions qui séparent exactement.
+    
+    Stratégie: pour chaque paire de films restants, trouver ce qui les différencie.
+    """
+    n = len(candidates)
+    if n < 2 or n > 15:
+        return []
+    
+    questions: List[Question] = []
+    added_keys: set = set()
+    
+    # Pour chaque film dans le pool, générer des questions très spécifiques
+    for m in candidates:
+        mid = movie_id(m)
+        if mid is None:
+            continue
+        
+        details = get_details(conn, mid)
+        title = str(m.get("title", "")).strip()
+        year = safe_year(m.get("release_date"))
+        
+        # 1. Première lettre du titre (si pas déjà demandé et utile)
+        if title:
+            letter = title[0].upper() if not title[0].isdigit() else title[0]
+            key = f"bin_title_letter_{letter}"
+            if key not in asked and key not in added_keys:
+                # Vérifier que cette lettre discrimine (pas tous les films ont la même)
+                yes_count = sum(1 for cand in candidates 
+                               if str(cand.get("title", "")).startswith(letter))
+                if 0 < yes_count < n:
+                    text = f"Le titre du film commence-t-il par la lettre '{letter}' ?"
+                    questions.append(Question(key, text, pred_title_starts_with(letter)))
+                    added_keys.add(key)
+        
+        # 2. Nombre de mots dans le titre
+        if title:
+            word_count = len(title.split())
+            if word_count >= 1:
+                key = f"bin_title_words_{word_count}"
+                if key not in asked and key not in added_keys:
+                    yes_count = sum(1 for cand in candidates 
+                                   if len(str(cand.get("title", "")).split()) == word_count)
+                    if 0 < yes_count < n:
+                        text = f"Le titre du film contient-il exactement {word_count} mot(s) ?"
+                        questions.append(Question(key, text, 
+                            lambda m, wc=word_count: len(str(m.get("title", "")).split()) == wc))
+                        added_keys.add(key)
+        
+        # 3. Décennie précise
+        if year:
+            decade = (year // 10) * 10
+            key = f"bin_decade_{decade}"
+            if key not in asked and key not in added_keys:
+                yes_count = sum(1 for cand in candidates 
+                               if safe_year(cand.get("release_date")) and
+                               decade <= safe_year(cand.get("release_date")) < decade + 10)  # type: ignore
+                if 0 < yes_count < n:
+                    text = f"Est-ce sorti dans les années {decade} ?"
+                    questions.append(Question(key, text, pred_decade(decade)))
+                    added_keys.add(key)
+        
+        # 4. Acteur principal unique
+        cast = details.get("credits", {}).get("cast", [])
+        if isinstance(cast, list):
+            for actor_data in cast[:2]:  # Top 2 acteurs
+                if isinstance(actor_data, dict):
+                    actor_name = actor_data.get("name", "").strip()
+                    if not actor_name:
+                        continue
+                    key = f"bin_actor_{actor_name.replace(' ', '_').lower()}"
+                    if key not in asked and key not in added_keys:
+                        # Vérifier que cet acteur est dans au moins 1 film mais pas tous
+                        actor_lower = actor_name.lower()
+                        yes_count = 0
+                        for cand in candidates:
+                            cand_mid = movie_id(cand)
+                            if cand_mid:
+                                cand_cast = get_details(conn, cand_mid).get("credits", {}).get("cast", [])
+                                if isinstance(cand_cast, list):
+                                    if any(c.get("name", "").lower() == actor_lower for c in cand_cast if isinstance(c, dict)):
+                                        yes_count += 1
+                        if 0 < yes_count < n:
+                            text = f"Est-ce que {actor_name} joue dans ce film ?"
+                            questions.append(Question(key, text, pred_actor_in_cast(conn, actor_name)))
+                            added_keys.add(key)
+        
+        # 5. Réalisateur
+        crew = details.get("credits", {}).get("crew", [])
+        if isinstance(crew, list):
+            for person in crew:
+                if isinstance(person, dict) and person.get("job") == "Director":
+                    dir_name = person.get("name", "").strip()
+                    if dir_name:
+                        key = f"bin_director_{dir_name.replace(' ', '_').lower()}"
+                        if key not in asked and key not in added_keys:
+                            dir_lower = dir_name.lower()
+                            yes_count = 0
+                            for cand in candidates:
+                                cand_mid = movie_id(cand)
+                                if cand_mid:
+                                    cand_crew = get_details(conn, cand_mid).get("credits", {}).get("crew", [])
+                                    if isinstance(cand_crew, list):
+                                        if any(c.get("name", "").lower() == dir_lower and c.get("job") == "Director"
+                                               for c in cand_crew if isinstance(c, dict)):
+                                            yes_count += 1
+                            if 0 < yes_count < n:
+                                text = f"Est-ce réalisé par {dir_name} ?"
+                                questions.append(Question(key, text, pred_has_director(conn, dir_name)))
+                                added_keys.add(key)
+                    break
+    
+    return questions
 
 Answer = str
 
@@ -1794,35 +1993,34 @@ def update_state_with_answer(
 ) -> None:
     """
     Ajuste les scores et retire les films qui accumulent trop de contradictions.
-    NOUVEAU: Élimination DURE pour toutes les caractéristiques mutuellement exclusives
+    AMÉLIORÉ: Gestion fine des données manquantes + scoring différencié par type de question.
     """
-    # NOUVEAU: Identification des questions à élimination DURE
-    # Ce sont des questions où la réponse est binaire/mutuellement exclusive
-    
+    # Identification des questions à élimination DURE
     hard_elimination_prefixes = [
-        "franchise_",      # Franchises (Marvel, Star Wars, etc.)
-        "language_",       # Langues (en, fr, ja, etc.)
-        "director_",       # Réalisateurs spécifiques (Nolan, Spielberg, etc.)
-        "joker_title_",    # Première lettre du titre (A-D, E-H, etc.)
-        "char_",           # Personnages principaux (Batman, Harry Potter, etc.)
-        "decade_",         # NOUVEAU: Décennies (1980s, 1990s, etc.)
-        "year_",           # NOUVEAU: Années spécifiques (2010, 2015, etc.)
+        "franchise_",
+        "language_",
+        "director_",
+        "joker_title_",
+        "char_",
+        "decade_",
+        "year_",
+        "validate_",      # AMÉLIORATION: les questions de validation sont aussi dures
     ]
     
     hard_elimination_keys = {
-        "is_animation",     # Animation vs Live-action
+        "is_animation",
         "is_live_action",
-        "is_short",         # Court-métrage vs Long-métrage
+        "is_short",
         "is_feature",
-        "runtime_lt_90",    # Durée du film
+        "runtime_lt_90",
         "runtime_ge_150",
-        "before_2000",      # Dates de sortie larges
+        "before_2000",
         "after_2010",
-        "is_saga",          # Franchise vs Standalone
+        "is_saga",
         "is_standalone",
-        "big_budget",       # Budget
+        "big_budget",
         "small_budget",
-        "is_american",      # Pays d'origine
+        "is_american",
         "is_french",
         "is_european",
         "is_asian",
@@ -1834,8 +2032,34 @@ def update_state_with_answer(
         any(q.key.startswith(prefix) for prefix in hard_elimination_prefixes)
     )
     
+    # AMÉLIORATION: Le boost "oui" varie selon le type de question
+    # Les questions de validation/acteur/réalisateur sont très fortes
+    def yes_boost(key: str) -> float:
+        if key.startswith("validate_"):
+            return 8.0   # Très fort: question ciblée sur le #1
+        if key.startswith(("director_", "dyn_director_")):
+            return 7.0   # Réalisateur = très discriminant
+        if key.startswith(("franchise_", "char_")):
+            return 6.0   # Franchise/Personnage = exclusif
+        if key.startswith(("actor_", "dyn_actor_")):
+            return 5.0   # Acteur
+        if key.startswith(("language_", "decade_", "year_")):
+            return 5.0   # Filtres temporels/linguistiques
+        if key.startswith("genre_"):
+            return 3.0   # Genre (moins exclusif)
+        return 5.0        # Défaut
+
+    def no_boost(key: str) -> float:
+        if key.startswith("validate_"):
+            return 4.0
+        if key.startswith(("director_", "franchise_", "char_")):
+            return 4.0
+        if key.startswith(("actor_", "dyn_actor_", "dyn_director_")):
+            return 3.0
+        return 3.0
+
     if ans == "y":
-        # ÉLIMINATION IMMÉDIATE sur TOUTES les questions "y"
+        # ÉLIMINATION IMMÉDIATE: tous ceux qui répondent False sont éliminés
         to_keep = []
         for m in state.candidates:
             mid = movie_id(m)
@@ -1843,14 +2067,14 @@ def update_state_with_answer(
                 continue
             r = q.predicate(m)
             if r is True:
-                # Film correspond → GARDER avec boost
-                state.scores[mid] = state.scores.get(mid, 0.0) + 5.0
+                state.scores[mid] = state.scores.get(mid, 0.0) + yes_boost(q.key)
                 to_keep.append(m)
             elif r is None:
-                # Données manquantes → GARDER avec pénalité
-                state.scores[mid] = state.scores.get(mid, 0.0) - 1.0
+                # AMÉLIORATION: données manquantes → pénalité plus forte pour les questions dures
+                penalty = -2.0 if is_hard_elimination else -0.5
+                state.scores[mid] = state.scores.get(mid, 0.0) + penalty
                 to_keep.append(m)
-            # Si r is False → ÉLIMINER (ne pas ajouter à to_keep)
+            # Si r is False → ÉLIMINER
         
         state.candidates = to_keep
         remaining_ids = {movie_id(m) for m in state.candidates if movie_id(m) is not None}
@@ -1858,7 +2082,7 @@ def update_state_with_answer(
         state.strikes = {mid: strikes for mid, strikes in state.strikes.items() if mid in remaining_ids}
 
     elif ans == "n":
-        # ÉLIMINATION IMMÉDIATE sur TOUTES les questions "n"
+        # ÉLIMINATION IMMÉDIATE: tous ceux qui répondent True sont éliminés
         to_keep = []
         for m in state.candidates:
             mid = movie_id(m)
@@ -1866,14 +2090,14 @@ def update_state_with_answer(
                 continue
             r = q.predicate(m)
             if r is False:
-                # Film ne correspond pas → GARDER avec boost
-                state.scores[mid] = state.scores.get(mid, 0.0) + 3.0
+                state.scores[mid] = state.scores.get(mid, 0.0) + no_boost(q.key)
                 to_keep.append(m)
             elif r is None:
-                # Données manquantes → GARDER avec boost léger
-                state.scores[mid] = state.scores.get(mid, 0.0) + 0.5
+                # AMÉLIORATION: données manquantes → légère pénalité pour questions dures
+                penalty = -1.0 if is_hard_elimination else 0.3
+                state.scores[mid] = state.scores.get(mid, 0.0) + penalty
                 to_keep.append(m)
-            # Si r is True → ÉLIMINER (ne pas ajouter à to_keep)
+            # Si r is True → ÉLIMINER
         
         state.candidates = to_keep
         remaining_ids = {movie_id(m) for m in state.candidates if movie_id(m) is not None}
@@ -1887,11 +2111,14 @@ def update_state_with_answer(
                 continue
             r = q.predicate(m)
             if r is True:
-                boost = 1.5 if is_hard_elimination else 0.5
+                boost = 2.0 if is_hard_elimination else 1.0
                 state.scores[mid] = state.scores.get(mid, 0.0) + boost
             elif r is False:
-                penalty = -2.0 if is_hard_elimination else -0.75
+                penalty = -2.5 if is_hard_elimination else -1.0
                 state.scores[mid] = state.scores.get(mid, 0.0) + penalty
+                # AMÉLIORATION: accumuler des strikes sur les questions dures
+                if is_hard_elimination:
+                    state.strikes[mid] = state.strikes.get(mid, 0) + 1
 
     elif ans == "pn":
         for m in state.candidates:
@@ -1900,11 +2127,13 @@ def update_state_with_answer(
                 continue
             r = q.predicate(m)
             if r is False:
-                boost = 1.5 if is_hard_elimination else 0.5
+                boost = 2.0 if is_hard_elimination else 1.0
                 state.scores[mid] = state.scores.get(mid, 0.0) + boost
             elif r is True:
-                penalty = -2.0 if is_hard_elimination else -0.75
+                penalty = -2.5 if is_hard_elimination else -1.0
                 state.scores[mid] = state.scores.get(mid, 0.0) + penalty
+                if is_hard_elimination:
+                    state.strikes[mid] = state.strikes.get(mid, 0) + 1
 
     elif ans == "?":
         for m in state.candidates:
@@ -1971,17 +2200,21 @@ def score_of(state: EngineState, m: dict) -> float:
 
 def should_enter_guess_mode(state: EngineState) -> bool:
     """
-    RÈGLES STRICTES - Guess UNIQUEMENT dans 3 cas:
+    RÈGLES STRICTES - Guess UNIQUEMENT dans 4 cas:
     1. Un seul candidat restant
-    2. Score du #1 est 2x supérieur au #2
+    2. Score du #1 est 2x supérieur au #2 ET on a posé au moins 5 questions
     3. Le même film est #1 pendant 10 questions d'affilée
+    4. NOUVEAU: Score du #1 très élevé (>= 15) ET #2 négatif ET >= 7 questions posées
     """
     # CAS 1: Un seul candidat
     if len(state.candidates) == 1:
         return True
     
-    # CAS 2: Score 2x supérieur au #2
-    if len(state.candidates) >= 2:
+    # Nécessite un minimum de questions pour éviter les faux positifs prématurés
+    min_questions_for_ratio = 5
+    
+    # CAS 2: Score 2x supérieur au #2 (avec garde-fou)
+    if len(state.candidates) >= 2 and state.question_count >= min_questions_for_ratio:
         s1 = score_of(state, state.candidates[0])
         s2 = score_of(state, state.candidates[1])
         
@@ -1995,6 +2228,12 @@ def should_enter_guess_mode(state: EngineState) -> bool:
     # CAS 3: Streak de 10 questions minimum
     if state.top_streak_len >= 10:
         return True
+    
+    # CAS 4: NOUVEAU - Score très élevé avec pool réduit
+    if len(state.candidates) <= 5 and state.question_count >= 7:
+        s1 = score_of(state, state.candidates[0])
+        if s1 >= 15.0:
+            return True
     
     # Sinon: PAS DE GUESS, continuer les questions
     return False
@@ -2214,11 +2453,14 @@ def main() -> int:
             dyn_people = build_dynamic_questions(conn, state.candidates, state.asked, top_k=60)
             dyn_years = build_dynamic_year_questions(state.candidates, state.asked)
             
-            # NOUVEAU: Questions de VALIDATION du TOP candidat (priorité élevée)
+            # Questions de VALIDATION du TOP candidat (priorité élevée)
             validation_questions = build_top_validation_questions(conn, state.candidates, state.asked)
             
-            # STRATÉGIE: Mettre les questions de validation EN PREMIER pour boost naturel
-            merged_questions = validation_questions + dyn_kw + dyn_people + dyn_years + questions
+            # NOUVEAU: Questions de DÉSAMBIGUÏSATION BINAIRE sur très petit pool
+            binary_questions = build_binary_disambiguation_questions(conn, state.candidates, state.asked)
+            
+            # STRATÉGIE: Questions de validation + binaires EN PREMIER pour convergence rapide
+            merged_questions = validation_questions + binary_questions + dyn_kw + dyn_people + dyn_years + questions
 
             # AMÉLIORATION: Ajouter de l'aléatoire sur la première question
             is_first = (state.question_count == 0)
