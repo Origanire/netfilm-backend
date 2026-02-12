@@ -7,37 +7,18 @@ import traceback
 from pathlib import Path
 from typing import Dict, Any
 
-# ==============================
-# CHARGEMENT DU FICHIER .env
-# ==============================
-def load_env_file():
-    """Charge le fichier .env manuellement (sans dépendance python-dotenv)."""
-    env_path = Path(__file__).resolve().parent / ".env"
-    if not env_path.exists():
-        print(f"⚠️  Fichier .env non trouvé: {env_path}")
-        return
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            # Ignorer les commentaires et lignes vides
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip()
-                # Ne pas écraser les variables déjà définies dans l'environnement
-                if key and value and key not in os.environ:
-                    os.environ[key] = value
-
-load_env_file()
-# ==============================
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Import du moteur IA au lieu de l'ancien
-from engines.engine_akinator_multi_ai import AkinatorSession
+from engines.engine_akinator import (
+    load_genres,
+    discover_movies,
+    default_questions,
+    init_state,
+    sort_candidates,
+    choose_best_question,
+    update_state_with_answer,
+)
 
 app = Flask(__name__)
 
@@ -49,19 +30,23 @@ CORS(app, resources={
     }
 })
 
-OPTIONS_UI = ["Oui", "Non", "Je ne sais pas"]
+OPTIONS_UI = ["Oui", "Non", "Je ne sais pas", "Probablement", "Probablement pas"]
 
 UI_TO_ENGINE = {
     "Oui": "y",
     "Non": "n",
     "Je ne sais pas": "?",
+    "Probablement": "py",
+    "Probablement pas": "pn",
     "y": "y",
     "n": "n",
     "?": "?",
+    "py": "py",
+    "pn": "pn",
 }
 
-# Sessions stockées en mémoire (utilise l'IA)
-game_sessions: Dict[str, AkinatorSession] = {}
+# Session: on ne stocke PAS les questions (car elles capturent conn)
+game_state: Dict[str, Dict[str, Any]] = {}
 
 
 def repo_root() -> Path:
@@ -70,6 +55,21 @@ def repo_root() -> Path:
 
 def db_path() -> str:
     return str(repo_root() / "movies.db")
+
+
+def open_db() -> sqlite3.Connection:
+    p = db_path()
+    if not os.path.exists(p):
+        raise FileNotFoundError(f"movies.db introuvable: {p}")
+
+    conn = sqlite3.connect(p, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+
+    conn.execute("PRAGMA synchronous = OFF")
+    conn.execute("PRAGMA journal_mode = MEMORY")
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA cache_size = 10000")
+    return conn
 
 
 def new_game_id() -> str:
@@ -93,52 +93,52 @@ def internal_error(where: str, exc: Exception):
 
 @app.get("/")
 def health():
-    # Récupérer le provider configuré
-    provider = os.getenv("AI_PROVIDER", "gemini")
-    
-    # Vérifier quelle clé API est configurée
-    api_status = {
-        "gemini": bool(os.getenv("GOOGLE_API_KEY")),
-        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "openai": bool(os.getenv("OPENAI_API_KEY"))
-    }
-    
-    return jsonify({
-        "status": "ok", 
-        "service": "Akinator API (IA)", 
-        "db": db_path(),
-        "ai_provider": provider,
-        "api_configured": api_status.get(provider, False)
-    }), 200
+    return jsonify({"status": "ok", "service": "Akinator API", "db": db_path()}), 200
 
 
 @app.post("/start")
 def start_game():
     try:
-        gid = new_game_id()
-        
-        # Créer une session IA
-        provider = os.getenv("AI_PROVIDER", "gemini")
-        session = AkinatorSession(db_path=db_path(), provider=provider)
-        
-        # Démarrer le jeu
-        result = session.start()
-        
-        if result.get("status") != "ok":
-            return jsonify({"error": "Erreur lors du démarrage"}), 500
-        
-        # Stocker la session
-        game_sessions[gid] = session
-        
-        # Formater la réponse au format attendu par le frontend
-        return jsonify({
-            "game_id": gid,
-            "question": result["content"],
-            "question_key": str(result["question_number"]),
-            "options": OPTIONS_UI,
-            "finished": False,
-        }), 200
-        
+        conn = open_db()
+        try:
+            load_genres(conn)
+
+            movies = discover_movies(conn)
+            state = init_state(movies)
+            sort_candidates(state)
+
+            # QUESTIONS construites ici avec conn vivant
+            questions = default_questions(conn)
+
+            q = choose_best_question(
+                state.candidates,
+                questions,
+                state.asked,
+                is_first_question=True,
+                state=state,
+            )
+            if q is None:
+                return jsonify({"error": "Aucune question trouvée"}), 400
+
+            gid = new_game_id()
+
+            # Stocker uniquement l'état + la question courante
+            game_state[gid] = {
+                "state": state,
+                "current_qkey": q.key,
+            }
+
+            return jsonify(
+                {
+                    "game_id": gid,
+                    "question": q.text,
+                    "question_key": q.key,
+                    "options": OPTIONS_UI,
+                    "finished": False,
+                }
+            ), 200
+        finally:
+            conn.close()
     except Exception as e:
         return internal_error("start_game", e)
 
@@ -149,44 +149,100 @@ def answer():
         data = request.get_json(silent=True) or {}
         gid = data.get("game_id")
         ui_answer = data.get("answer")
+        q_key = data.get("question_key")
 
         if not gid:
             return jsonify({"error": "game_id manquant"}), 400
-        if gid not in game_sessions:
+        if gid not in game_state:
             return jsonify({"error": "Partie non trouvée"}), 404
 
         if ui_answer not in UI_TO_ENGINE:
             return jsonify({"error": "Réponse invalide", "got": ui_answer}), 400
 
-        session = game_sessions[gid]
-        engine_answer = UI_TO_ENGINE[ui_answer]
+        session = game_state[gid]
+        state = session["state"]
 
-        # Envoyer la réponse à l'IA
-        result = session.answer(engine_answer)
-        
-        if result.get("status") != "ok":
-            return jsonify({"error": "Erreur lors du traitement"}), 500
+        # q_key obligatoire, sinon fallback
+        if not q_key:
+            q_key = session.get("current_qkey")
+        if not q_key:
+            return jsonify({"error": "question_key manquant"}), 400
 
-        # Si l'IA propose un film (guess)
-        if result.get("action") == "guess":
-            return jsonify({
-                "finished": False,
-                "asking_confirmation": True,
-                "guess": result["content"],
-                "confirmation_options": ["Oui, c'est ça!", "Non, continuer"]
-            }), 200
-        
-        # Sinon, c'est une nouvelle question
-        return jsonify({
-            "finished": False,
-            "asking_confirmation": False,
-            "question": result["content"],
-            "question_key": str(result["question_number"]),
-            "options": OPTIONS_UI,
-        }), 200
+        conn = open_db()
+        try:
+            load_genres(conn)
+
+            # QUESTIONS reconstruites à chaque requête (conn vivant)
+            questions = default_questions(conn)
+
+            q = next((qq for qq in questions if qq.key == q_key), None)
+            if q is None:
+                return jsonify({"error": "Question introuvable", "question_key": q_key}), 400
+
+            engine_answer = UI_TO_ENGINE[ui_answer]
+
+            state.asked.add(q.key)
+            state.question_count += 1
+
+            update_state_with_answer(state, q, engine_answer, max_strikes=3)
+            sort_candidates(state)
+
+            # Vérifier s'il faut proposer un film
+            return _next_step(state, questions, session)
+
+        finally:
+            conn.close()
 
     except Exception as e:
         return internal_error("answer", e)
+
+
+def _next_step(state, questions, session):
+    """Logique commune pour déterminer: proposer question ou film"""
+    
+    if not state.candidates:
+        return jsonify({"finished": True, "guess": "Désolé, j'ai échoué! 😅"}), 200
+    
+    # Si peu de candidats, proposer le top film
+    if len(state.candidates) <= 3:
+        film = state.candidates[0]
+        session["proposed_film_id"] = film.get("id")
+        return jsonify({
+            "finished": False,
+            "asking_confirmation": True,
+            "guess": film.get("title", "Inconnu"),
+            "guess_id": film.get("id"),
+            "confirmation_options": ["Oui, c'est ça!", "Non, continuer"]
+        }), 200
+    
+    # Sinon, poser la question suivante
+    q2 = choose_best_question(
+        state.candidates,
+        questions,
+        state.asked,
+        is_first_question=False,
+        state=state,
+    )
+
+    if q2 is None:
+        # Plus de questions, proposer le top film
+        film = state.candidates[0]
+        session["proposed_film_id"] = film.get("id")
+        return jsonify({
+            "finished": False,
+            "asking_confirmation": True,
+            "guess": film.get("title", "Inconnu"),
+            "guess_id": film.get("id"),
+            "confirmation_options": ["Oui, c'est ça!", "Non, continuer"]
+        }), 200
+
+    session["current_qkey"] = q2.key
+    return jsonify({
+        "finished": False,
+        "question": q2.text,
+        "question_key": q2.key,
+        "options": OPTIONS_UI,
+    }), 200
 
 
 @app.post("/confirm")
@@ -196,52 +252,83 @@ def confirm_guess():
         gid = data.get("game_id")
         confirmed = data.get("confirmed")
 
-        if not gid or gid not in game_sessions:
+        if not gid or gid not in game_state:
             return jsonify({"error": "game_id manquant ou invalide"}), 400
         if not isinstance(confirmed, bool):
             return jsonify({"error": "confirmed doit être true ou false"}), 400
 
-        session = game_sessions[gid]
+        session = game_state[gid]
+        state = session["state"]
 
-        # Envoyer la confirmation à l'IA
-        result = session.confirm(confirmed)
-        
-        if result.get("status") != "ok":
-            return jsonify({"error": "Erreur lors de la confirmation"}), 500
-
-        # Si trouvé
-        if result.get("result") == "found":
-            # Supprimer la session
-            del game_sessions[gid]
-            
+        # Si confirmation = Oui → FIN DU JEU
+        if confirmed:
+            film = state.candidates[0] if state.candidates else {}
             return jsonify({
                 "finished": True,
-                "guess": "Gagné!",
+                "guess": film.get("title", "Inconnu"),
                 "message": "Bien joué! 🎬"
             }), 200
 
-        # Si continue
-        if result.get("action") == "guess":
-            # Nouvelle proposition
+        # Sinon = Non → REJETER CE FILM ET CONTINUER
+        if state.candidates:
+            state.candidates = state.candidates[1:]
+            sort_candidates(state)  # ← IMPORTANT: retrier !
+
+        # Si VRAIMENT plus de candidats
+        if not state.candidates:
             return jsonify({
-                "finished": False,
-                "asking_confirmation": True,
-                "guess": result["content"],
-                "confirmation_options": ["Oui, c'est ça!", "Non, continuer"]
+                "finished": True,
+                "guess": "Désolé, j'ai échoué! 😅"
             }), 200
-        else:
-            # Nouvelle question
+
+        # CONTINUER AVEC DES QUESTIONS (pas proposer un autre film tout de suite)
+        conn = open_db()
+        try:
+            load_genres(conn)
+            questions = default_questions(conn)
+
+            # Chercher une bonne prochaine question
+            q2 = choose_best_question(
+                state.candidates,
+                questions,
+                state.asked,
+                is_first_question=False,
+                state=state,
+            )
+
+            if q2 is None:
+                # Plus de questions disponibles, proposer le nouveau top film
+                if state.candidates:
+                    film = state.candidates[0]
+                    session["proposed_film_id"] = film.get("id")
+                    return jsonify({
+                        "finished": False,
+                        "asking_confirmation": True,
+                        "guess": film.get("title", "Inconnu"),
+                        "guess_id": film.get("id"),
+                        "confirmation_options": ["Oui, c'est ça!", "Non, continuer"]
+                    }), 200
+                else:
+                    return jsonify({
+                        "finished": True,
+                        "guess": "Désolé, j'ai échoué! 😅"
+                    }), 200
+
+            # Poser la prochaine question (pas proposer un film)
+            session["current_qkey"] = q2.key
             return jsonify({
                 "finished": False,
-                "asking_confirmation": False,
-                "question": result["content"],
-                "question_key": str(result["question_number"]),
+                "asking_confirmation": False,  # ← IMPORTANT: pas de confirmation
+                "question": q2.text,
+                "question_key": q2.key,
                 "options": OPTIONS_UI
             }), 200
 
+        finally:
+            conn.close()
+
     except Exception as e:
         return internal_error("confirm_guess", e)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)

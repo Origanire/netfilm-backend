@@ -1,12 +1,9 @@
 import subprocess
 import os
-import sys
 
 def run_backend(script, env=None):
-    # Utiliser le même exécutable Python que celui qui lance ce script
-    python_executable = sys.executable
     return subprocess.Popen([
-        python_executable, script
+        'python', script
     ], env=env)
 
 if __name__ == "__main__":
