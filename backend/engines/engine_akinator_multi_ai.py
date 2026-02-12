@@ -16,8 +16,14 @@ OPENAI_API_URL    = "https://api.openai.com/v1/chat/completions"
 
 # Modèles
 CLAUDE_MODEL = "claude-opus-4-5-20251101"
-GEMINI_MODEL = "gemini-2.0-flash"
 OPENAI_MODEL = "gpt-4o-mini"
+
+# Gemini : liste de fallback (si quota 429 sur le 1er, on essaie le suivant)
+GEMINI_MODELS_FALLBACK = [
+    "gemini-1.5-flash",      # Tier gratuit : 1500 req/jour, 15 req/min
+    "gemini-1.5-flash-8b",   # Plus léger, quota séparé
+    "gemini-1.0-pro",        # Ancienne gen, quota séparé
+]
 
 # NOTE: Les clés API sont lues dynamiquement via os.getenv() à chaque appel,
 # pas au chargement du module, pour être sûr que le .env est déjà chargé.
@@ -96,11 +102,6 @@ class MultiAIProvider:
         if not api_key:
             raise ValueError("GOOGLE_API_KEY non configurée dans .env")
 
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{GEMINI_MODEL}:generateContent?key={api_key}"
-        )
-
         contents = []
         for msg in self.conversation_history:
             role = "user" if msg["role"] == "user" else "model"
@@ -112,18 +113,37 @@ class MultiAIProvider:
             "generationConfig": {"temperature": 0.7, "maxOutputTokens": 512},
         }
 
-        resp = requests.post(url, json=payload, timeout=30)
+        # Essayer chaque modèle dans l ordre, passer au suivant si quota 429
+        last_error = None
+        for model in GEMINI_MODELS_FALLBACK:
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent?key={api_key}"
+            )
+            resp = requests.post(url, json=payload, timeout=30)
 
-        # Afficher la vraie erreur si ça échoue
-        if not resp.ok:
-            raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
+            if resp.status_code == 429:
+                print(f"⚠️  Quota dépassé sur {model}, tentative avec le modèle suivant...")
+                last_error = f"Quota 429 sur {model}"
+                continue
 
-        data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+            if not resp.ok:
+                raise RuntimeError(f"Gemini/{model} HTTP {resp.status_code}: {resp.text[:300]}")
 
-        self.conversation_history.append({"role": "user",      "content": user_message})
-        self.conversation_history.append({"role": "assistant", "content": text})
-        return text
+            data = resp.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+            self.conversation_history.append({"role": "user",      "content": user_message})
+            self.conversation_history.append({"role": "assistant", "content": text})
+            print(f"✅ Gemini répondu via: {model}")
+            return text
+
+        # Tous les modèles ont échoué avec 429
+        raise RuntimeError(
+            f"Quota Gemini dépassé sur tous les modèles ({', '.join(GEMINI_MODELS_FALLBACK)}). "
+            f"Solutions: 1) Attendre minuit UTC 2) Créer une nouvelle clé API Google "
+            f"3) Passer à AI_PROVIDER=claude ou openai dans .env"
+        )
 
     def _call_claude(self, user_message: str) -> str:
         api_key = self._anthropic_key
