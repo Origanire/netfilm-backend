@@ -1007,177 +1007,323 @@ def pred_actor_in_cast(conn: sqlite3.Connection, actor_name: str) -> Callable[[d
 
 def default_questions(conn: sqlite3.Connection) -> List[Question]:
     return [
+
+        # ─────────────────────────────────────────────
         # TYPE / FORMAT
-        Question("is_animation", "Est-ce que c'est un film d'animation ?", pred_is_animation(conn)),
-        Question("is_live_action", "Est-ce que c'est un film en live-action ?", pred_not_animation(conn)),
-        Question("is_short", "Est-ce que c'est un court-métrage ?", pred_is_short(conn)),
-        Question("is_feature", "Est-ce que c'est un long-métrage ?", pred_is_feature(conn)),
+        # ─────────────────────────────────────────────
+        Question("is_animation",  "Est-ce que c'est un film d'animation ?",      pred_is_animation(conn)),
+        Question("is_live_action","Est-ce que c'est un film en prises de vues réelles (live-action) ?", pred_not_animation(conn)),
+        Question("is_feature",    "Est-ce que c'est un long-métrage (≥ 60 min) ?", pred_is_feature(conn)),
+        Question("runtime_lt_90", "Est-ce que le film dure moins d'1h30 ?",      pred_runtime_lt(conn, 90)),
+        Question("runtime_90_120","Est-ce que le film dure entre 1h30 et 2h ?",
+                 lambda m: (lambda r, l: True if (r is not None and l is not None and not r and not l) else None)(
+                     pred_runtime_lt(conn, 90)(m), pred_runtime_ge(conn, 120)(m))),
+        Question("runtime_ge_150","Est-ce que le film dure plus de 2h30 ?",      pred_runtime_ge(conn, 150)),
 
-        # ÉPOQUE / SORTIE - DÉCENNIES PRÉCISES
-        Question("decade_1970s", "Est-ce que c'est sorti dans les années 1970 (1970-1979) ?", pred_decade(1970)),
-        Question("decade_1980s", "Est-ce que c'est sorti dans les années 1980 (1980-1989) ?", pred_decade(1980)),
-        Question("decade_1990s", "Est-ce que c'est sorti dans les années 1990 (1990-1999) ?", pred_decade(1990)),
-        Question("decade_2000s", "Est-ce que c'est sorti dans les années 2000 (2000-2009) ?", pred_decade(2000)),
-        Question("decade_2010s", "Est-ce que c'est sorti dans les années 2010 (2010-2019) ?", pred_decade(2010)),
-        Question("decade_2020s", "Est-ce que c'est sorti dans les années 2020+ (2020-2029) ?", pred_decade(2020)),
-        
-        # PÉRIODES LARGES (toujours utiles pour affiner)
-        Question("before_2000", "Est-ce que c'est sorti avant 2000 ?", pred_before_year(2000)),
-        Question("after_2010", "Est-ce que c'est sorti en 2010 ou après ?", pred_after_year(2010)),
+        # ─────────────────────────────────────────────
+        # DÉCENNIES — couverture complète des années 1920 à 2020
+        # ─────────────────────────────────────────────
+        Question("decade_1920s", "Le film est-il sorti dans les années 1920 ?",  pred_decade(1920)),
+        Question("decade_1930s", "Le film est-il sorti dans les années 1930 ?",  pred_decade(1930)),
+        Question("decade_1940s", "Le film est-il sorti dans les années 1940 ?",  pred_decade(1940)),
+        Question("decade_1950s", "Le film est-il sorti dans les années 1950 ?",  pred_decade(1950)),
+        Question("decade_1960s", "Le film est-il sorti dans les années 1960 ?",  pred_decade(1960)),
+        Question("decade_1970s", "Le film est-il sorti dans les années 1970 (1970–1979) ?", pred_decade(1970)),
+        Question("decade_1980s", "Le film est-il sorti dans les années 1980 (1980–1989) ?", pred_decade(1980)),
+        Question("decade_1990s", "Le film est-il sorti dans les années 1990 (1990–1999) ?", pred_decade(1990)),
+        Question("decade_2000s", "Le film est-il sorti dans les années 2000 (2000–2009) ?", pred_decade(2000)),
+        Question("decade_2010s", "Le film est-il sorti dans les années 2010 (2010–2019) ?", pred_decade(2010)),
+        Question("decade_2020s", "Le film est-il sorti depuis 2020 ?",           pred_decade(2020)),
 
+        # Pivots larges pour couper vite au début
+        Question("before_1990",  "Le film est-il sorti avant 1990 ?",            pred_before_year(1990)),
+        Question("before_2000",  "Le film est-il sorti avant 2000 ?",
+                 pred_before_year(2000),  requires=None, excludes=frozenset({"before_1990"})),
+        Question("after_2010",   "Le film est-il sorti en 2010 ou après ?",      pred_after_year(2010)),
+        Question("after_2020",   "Le film est-il sorti en 2020 ou après ?",
+                 pred_after_year(2020),   requires=None, excludes=frozenset({"before_2000","before_1990"})),
+
+        # ─────────────────────────────────────────────
         # GENRES
-        Question("genre_action", "Est-ce que c'est un film d'action ?", pred_has_genre(conn, "Action")),
-        Question("genre_adventure", "Y a-t-il des voyages, quêtes ou explorations ?", pred_has_genre(conn, "Adventure")),
-        Question("genre_comedy", "Est-ce que c'est une comédie ?", pred_has_genre(conn, "Comedy")),
-        Question("genre_drama", "Est-ce principalement un drame (film émotionnel/sérieux) ?", pred_has_genre(conn, "Drama")),
-        Question("genre_fantasy", "Y a-t-il de la magie ou du fantastique ?", pred_has_genre(conn, "Fantasy")),
-        Question("genre_horror", "Est-ce que c'est un film d'horreur ?", pred_has_genre(conn, "Horror")),
-        Question("genre_mystery", "Est-ce que c'est un film à mystère ?", pred_has_genre(conn, "Mystery")),
-        Question("genre_romance", "Est-ce que c'est une romance ?", pred_has_genre(conn, "Romance")),
-        Question("genre_scifi", "Y a-t-il de la SF (technologie futuriste, aliens, espace) ?", pred_has_genre(conn, "Science Fiction")),
-        Question("genre_thriller", "Est-ce un film à suspense/mystère ?", pred_has_genre(conn, "Thriller")),
-        Question("genre_crime", "Est-ce que c'est un film criminel ?", pred_has_genre(conn, "Crime")),
-        Question("genre_family", "Est-ce que c'est un film familial ?", pred_has_genre(conn, "Family")),
-        Question("genre_war", "Est-ce que c'est un film de guerre ?", pred_has_genre(conn, "War")),
-        Question("genre_history", "Est-ce que c'est un film historique ?", pred_has_genre(conn, "History")),
-        Question("genre_music", "Est-ce que la musique est centrale ?", pred_has_genre(conn, "Music")),
-        Question("genre_documentary", "Est-ce que c'est un documentaire ?", pred_has_genre(conn, "Documentary")),
+        # ─────────────────────────────────────────────
+        Question("genre_action",     "Est-ce un film d'action ?",                         pred_has_genre(conn, "Action")),
+        Question("genre_adventure",  "Y a-t-il des aventures, quêtes ou explorations ?",  pred_has_genre(conn, "Adventure")),
+        Question("genre_comedy",     "Est-ce une comédie (film drôle) ?",                 pred_has_genre(conn, "Comedy")),
+        Question("genre_drama",      "Est-ce principalement un drame (film sérieux/émouvant) ?", pred_has_genre(conn, "Drama")),
+        Question("genre_fantasy",    "Y a-t-il de la magie ou du fantastique ?",          pred_has_genre(conn, "Fantasy")),
+        Question("genre_horror",     "Est-ce un film d'horreur ?",                        pred_has_genre(conn, "Horror")),
+        Question("genre_mystery",    "Y a-t-il une enquête ou un mystère à résoudre ?",   pred_has_genre(conn, "Mystery")),
+        Question("genre_romance",    "Est-ce une histoire d'amour / romance ?",           pred_has_genre(conn, "Romance")),
+        Question("genre_scifi",      "Y a-t-il de la science-fiction (espace, robots, futur) ?", pred_has_genre(conn, "Science Fiction")),
+        Question("genre_thriller",   "Est-ce un thriller (suspense, tension) ?",          pred_has_genre(conn, "Thriller")),
+        Question("genre_crime",      "Est-ce un film policier ou criminel ?",             pred_has_genre(conn, "Crime")),
+        Question("genre_family",     "Est-ce un film tout public / familial ?",           pred_has_genre(conn, "Family")),
+        Question("genre_war",        "Est-ce un film de guerre ?",                        pred_has_genre(conn, "War")),
+        Question("genre_history",    "Est-ce un film historique (époque passée) ?",       pred_has_genre(conn, "History")),
+        Question("genre_music",      "La musique est-elle centrale dans l'histoire ?",    pred_has_genre(conn, "Music")),
+        Question("genre_documentary","Est-ce un documentaire ?",                          pred_has_genre(conn, "Documentary")),
+        Question("genre_western",    "Est-ce un western ?",                               pred_has_genre(conn, "Western")),
+        Question("genre_sport",      "Le sport est-il le thème principal ?",              pred_has_genre(conn, "Sport")),
 
-        # PUBLIC / ÂGE
-        Question("is_adult", "Est-ce que c'est un film pour adultes ?", pred_is_adult()),
+        # ─────────────────────────────────────────────
+        # LIEU / CADRE DE L'HISTOIRE
+        # ─────────────────────────────────────────────
+        Question("setting_space",     "L'histoire se déroule-t-elle dans l'espace ?",         pred_keyword(conn, "space")),
+        Question("setting_sea",       "L'histoire se déroule-t-elle en mer / sur l'océan ?",  pred_keyword(conn, "ocean")),
+        Question("setting_city",      "L'histoire se déroule-t-elle principalement en ville ?",pred_keyword(conn, "new york")),
+        Question("setting_jungle",    "L'histoire se déroule-t-elle dans la jungle ?",        pred_keyword(conn, "jungle")),
+        Question("setting_desert",    "L'histoire se déroule-t-elle dans un désert ?",        pred_keyword(conn, "desert")),
+        Question("setting_school",    "L'histoire se passe-t-elle dans une école ?",          pred_keyword(conn, "school")),
+        Question("setting_prison",    "L'histoire se passe-t-elle en prison ?",               pred_keyword(conn, "prison")),
+        Question("setting_post_apo",  "Le monde est-il post-apocalyptique / en ruine ?",      pred_keyword(conn, "post-apocalyptic")),
+        Question("setting_future",    "L'histoire se déroule-t-elle dans le futur ?",         pred_keyword(conn, "future")),
+        Question("setting_medieval",  "Le cadre est-il médiéval (chevaliers, royaumes) ?",    pred_keyword(conn, "middle ages")),
+        Question("setting_ww2",       "L'histoire se déroule-t-elle pendant la Seconde Guerre mondiale ?", pred_keyword(conn, "world war ii")),
+        Question("setting_ww1",       "L'histoire se déroule-t-elle pendant la Première Guerre mondiale ?", pred_keyword(conn, "world war i")),
 
-        # DURÉE
-        Question("runtime_lt_90", "Est-ce que le film dure moins de 1h30 ?", pred_runtime_lt(conn, 90)),
-        Question("runtime_ge_150", "Est-ce que le film dure plus de 2h30 ?", pred_runtime_ge(conn, 150)),
+        # ─────────────────────────────────────────────
+        # TON / AMBIANCE
+        # ─────────────────────────────────────────────
+        Question("tone_dark",        "Le film a-t-il une ambiance sombre et pesante ?",       pred_keyword(conn, "dark")),
+        Question("tone_funny",       "Le film est-il principalement comique / humoristique ?", pred_keyword(conn, "comedy")),
+        Question("tone_scary",       "Le film est-il effrayant / fait-il peur ?",              pred_keyword(conn, "fear")),
+        Question("tone_feel_good",   "Est-ce un film feel-good / optimiste ?",                pred_keyword(conn, "feel-good")),
+        Question("tone_violent",     "Y a-t-il beaucoup de violence ?",                       pred_keyword(conn, "violence")),
+        Question("tone_suspense",    "Y a-t-il beaucoup de suspense / rebondissements ?",     pred_keyword(conn, "suspense")),
+        Question("tone_romantic",    "Est-ce que le film est romantique / sentimental ?",     pred_keyword(conn, "romance")),
+        Question("tone_sad",         "Le film est-il triste / émouvant (fait pleurer) ?",     pred_keyword(conn, "sadness")),
 
-        # ORIGINE / LANGUE - AVEC EXCLUSIONS LOGIQUES
-        Question("is_american", "Est-ce que c'est un film américain ?", pred_is_american(conn)),
-        Question("is_french", "Est-ce que c'est un film français ?", pred_is_french(conn)),
-        Question("is_european", "Est-ce que c'est un film européen ?", pred_is_european(conn)),
-        Question("is_asian", "Est-ce que c'est un film asiatique ?", pred_is_asian(conn)),
-        
-        # LANGUE ORIGINALE - EXCLUSION MUTUELLE TOTALE
-        # Dès qu'on répond "oui" à une langue, toutes les autres sont exclues
-        Question("language_en", "La langue originale est-elle l'anglais ?", pred_language("en")),
-        Question("language_fr", "La langue originale est-elle le français ?", pred_language("fr")),
-        Question("language_ja", "La langue originale est-elle le japonais ?", pred_language("ja")),
-        Question("language_es", "La langue originale est-elle l'espagnol ?", pred_language("es")),
-        Question("language_de", "La langue originale est-elle l'allemand ?", pred_language("de")),
-        Question("language_it", "La langue originale est-elle l'italien ?", pred_language("it")),
-        Question("language_ko", "La langue originale est-elle le coréen ?", pred_language("ko")),
-        Question("language_zh", "La langue originale est-elle le chinois ?", pred_language("zh")),
+        # ─────────────────────────────────────────────
+        # NARRATION / STRUCTURE
+        # ─────────────────────────────────────────────
+        Question("narr_twist",       "Y a-t-il un retournement de situation / twist final ?", pred_keyword(conn, "twist ending")),
+        Question("narr_time_travel", "Y a-t-il des voyages dans le temps ?",                  pred_keyword(conn, "time travel")),
+        Question("narr_flashback",   "Le film utilise-t-il des flashbacks importants ?",      pred_keyword(conn, "flashback")),
+        Question("narr_heist",       "Est-ce un film de braquage / casse ?",                  pred_keyword(conn, "heist")),
+        Question("narr_road_movie",  "Est-ce un road movie (voyage sur la route) ?",          pred_keyword(conn, "road trip")),
+        Question("narr_survival",    "Le personnage principal lutte-t-il pour survivre ?",    pred_keyword(conn, "survival")),
+        Question("narr_revenge",     "La vengeance est-elle un moteur de l'histoire ?",       pred_keyword(conn, "revenge")),
+        Question("narr_love_story",  "Y a-t-il une grande histoire d'amour ?",                pred_keyword(conn, "love story")),
+        Question("narr_redemption",  "Y a-t-il une quête de rédemption / rachat ?",           pred_keyword(conn, "redemption")),
+        Question("narr_based_book",  "Est-ce adapté d'un livre / roman ?",                    pred_keyword(conn, "based on novel")),
+        Question("narr_based_comic", "Est-ce adapté d'une bande dessinée / comic ?",          pred_keyword(conn, "based on comic")),
+        Question("narr_true_story",  "Est-ce basé sur une histoire vraie ?",                  pred_keyword(conn, "based on true story")),
+        Question("narr_coming_age",  "Est-ce une histoire de passage à l'âge adulte ?",       pred_keyword(conn, "coming of age")),
 
-        # SUCCÈS / POPULARITÉ
-        Question("popular", "Est-ce que c'est un film très populaire ?", pred_popularity_ge(50)),
-        Question("very_popular", "Est-ce que c'est un film culte ou ultra connu ?", pred_popularity_ge(80)),
+        # ─────────────────────────────────────────────
+        # PUBLIC CIBLE
+        # ─────────────────────────────────────────────
+        Question("audience_children","Est-ce fait pour les enfants (film jeunesse) ?",        pred_keyword(conn, "children")),
+        Question("audience_teen",    "Est-ce destiné aux adolescents ?",                      pred_keyword(conn, "teenager")),
+        Question("is_adult",         "Est-ce un film strictement réservé aux adultes (contenu explicite) ?", pred_is_adult()),
 
-        # FINANCES - AVEC EXCLUSIONS LOGIQUES
-        Question("big_budget", "Est-ce que le film a un gros budget (plus de 50 000 000) ?", pred_budget_ge(conn, 50_000_000)),
-        Question("small_budget", "Est-ce que le film a un petit budget (moins de 10 000 000) ?", pred_budget_lt(conn, 10_000_000),
-                excludes={"big_budget"}),  # NOUVEAU: si gros budget, ne pas demander petit budget
-        Question("box_office_success", "Est-ce que le film a bien marché au box-office (plus de 100 000 000 de revenu) ?", pred_revenue_ge(conn, 100_000_000)),
-        Question("is_indie", "Est-ce que c'est un film indépendant ?", pred_is_indie(conn),
-                excludes={"big_budget"}),  # NOUVEAU: si gros budget, pas indé
+        # ─────────────────────────────────────────────
+        # PROTAGONISTE
+        # ─────────────────────────────────────────────
+        Question("hero_female",      "Le/la protagoniste principal(e) est-il/elle une femme ?", pred_keyword(conn, "female protagonist")),
+        Question("hero_child",       "Le personnage principal est-il un enfant ?",              pred_keyword(conn, "child hero")),
+        Question("hero_villain",     "Suit-on principalement un anti-héros ou un méchant ?",   pred_keyword(conn, "anti-hero")),
+        Question("hero_group",       "Y a-t-il un groupe / équipe de héros (pas un seul) ?",   pred_keyword(conn, "ensemble cast")),
+        Question("hero_animal",      "Un animal est-il le personnage principal ?",              pred_keyword(conn, "animal")),
+        Question("hero_robot_ai",    "Le protagoniste est-il un robot ou une IA ?",             pred_keyword(conn, "robot")),
 
-        # FRANCHISE / ADAPTATION
-        Question("is_saga", "Le film fait-il partie d'une série/franchise (avec suites/prequels) ?", pred_is_saga(conn)),
-        Question("is_standalone", "Est-ce que c'est un film unique ?", pred_not_saga(conn)),
-        Question("is_adaptation", "Est-ce que c'est une adaptation ?", pred_is_adaptation(conn)),
-        Question("based_on_book", "Est-ce que c'est basé sur un livre ?", pred_keyword(conn, "based on novel")),
-        Question("based_on_comic", "Est-ce que c'est basé sur un comic ?", pred_keyword(conn, "based on comic")),
-        Question("based_on_true_story", "Est-ce que c'est basé sur une histoire vraie ?", pred_keyword(conn, "based on true story")),
-        Question("superhero", "Est-ce que c'est un film de super-héros ?", pred_keyword(conn, "superhero")),
+        # ─────────────────────────────────────────────
+        # THÈMES UNIVERSELS
+        # ─────────────────────────────────────────────
+        Question("theme_family",     "La famille est-elle au cœur du film ?",                  pred_keyword(conn, "family")),
+        Question("theme_friendship", "L'amitié est-elle un thème central ?",                   pred_keyword(conn, "friendship")),
+        Question("theme_power",      "Le film parle-t-il de pouvoir / domination ?",           pred_keyword(conn, "power")),
+        Question("theme_identity",   "Le film explore-t-il la question de l'identité ?",       pred_keyword(conn, "identity")),
+        Question("theme_good_evil",  "C'est un affrontement entre le bien et le mal ?",        pred_keyword(conn, "good versus evil")),
+        Question("theme_money",      "L'argent / la richesse sont-ils au centre de l'histoire ?", pred_keyword(conn, "money")),
+        Question("theme_politics",   "Y a-t-il une dimension politique importante ?",          pred_keyword(conn, "politics")),
+        Question("theme_religion",   "La religion / la foi joue-t-elle un rôle clé ?",         pred_keyword(conn, "religion")),
+        Question("theme_nature",     "La nature / l'environnement est-il un enjeu majeur ?",   pred_keyword(conn, "nature")),
+        Question("theme_war_cost",   "Le film montre-t-il les conséquences humaines de la guerre ?", pred_keyword(conn, "war")),
+        Question("theme_sacrifice",  "Un personnage fait-il un grand sacrifice ?",             pred_keyword(conn, "sacrifice")),
+        Question("theme_dream",      "Les rêves ou l'inconscient sont-ils importants ?",       pred_keyword(conn, "dream")),
+        Question("theme_tech",       "La technologie / l'informatique est-elle centrale ?",    pred_keyword(conn, "technology")),
+        Question("theme_superhero",  "Est-ce un film de super-héros ?",                        pred_keyword(conn, "superhero")),
+        Question("theme_magic",      "Y a-t-il de la magie ou des pouvoirs surnaturels ?",    pred_keyword(conn, "magic")),
+        Question("theme_chosen_one", "Le héros est-il un élu / le seul à pouvoir sauver le monde ?", pred_keyword(conn, "chosen one")),
 
-        # JOKERS TITRE
-        Question("joker_title_a_d", "Le titre commence-t-il par A, B, C ou D ?",
-                 lambda m: pred_title_starts_with("A")(m) or pred_title_starts_with("B")(m) or
-                           pred_title_starts_with("C")(m) or pred_title_starts_with("D")(m)),
-        Question("joker_title_e_h", "Le titre commence-t-il par E, F, G ou H ?",
-                 lambda m: pred_title_starts_with("E")(m) or pred_title_starts_with("F")(m) or
-                           pred_title_starts_with("G")(m) or pred_title_starts_with("H")(m)),
-        Question("joker_title_i_l", "Le titre commence-t-il par I, J, K ou L ?",
-                 lambda m: pred_title_starts_with("I")(m) or pred_title_starts_with("J")(m) or
-                           pred_title_starts_with("K")(m) or pred_title_starts_with("L")(m)),
-        Question("joker_title_m_p", "Le titre commence-t-il par M, N, O ou P ?",
-                 lambda m: pred_title_starts_with("M")(m) or pred_title_starts_with("N")(m) or
-                           pred_title_starts_with("O")(m) or pred_title_starts_with("P")(m)),
-        Question("joker_title_q_t", "Le titre commence-t-il par Q, R, S ou T ?",
-                 lambda m: pred_title_starts_with("Q")(m) or pred_title_starts_with("R")(m) or
-                           pred_title_starts_with("S")(m) or pred_title_starts_with("T")(m)),
-        Question("joker_title_u_z", "Le titre commence-t-il par U, V, W, X, Y ou Z ?",
-                 lambda m: pred_title_starts_with("U")(m) or pred_title_starts_with("V")(m) or
-                           pred_title_starts_with("W")(m) or pred_title_starts_with("X")(m) or
-                           pred_title_starts_with("Y")(m) or pred_title_starts_with("Z")(m)),
+        # ─────────────────────────────────────────────
+        # ORIGINE / LANGUE
+        # ─────────────────────────────────────────────
+        Question("is_american",  "Est-ce une production américaine ?",    pred_is_american(conn)),
+        Question("is_french",    "Est-ce une production française ?",     pred_is_french(conn)),
+        Question("is_european",  "Est-ce une production européenne ?",    pred_is_european(conn)),
+        Question("is_asian",     "Est-ce une production asiatique ?",     pred_is_asian(conn)),
 
-        # RÉALISATEURS CÉLÈBRES
-        Question("director_nolan", "Est-ce que c'est réalisé par Christopher Nolan ?", pred_has_director(conn, "Christopher Nolan")),
-        Question("director_spielberg", "Est-ce que c'est réalisé par Steven Spielberg ?", pred_has_director(conn, "Steven Spielberg")),
-        Question("director_tarantino", "Est-ce que c'est réalisé par Quentin Tarantino ?", pred_has_director(conn, "Quentin Tarantino")),
-        Question("director_scorsese", "Est-ce que c'est réalisé par Martin Scorsese ?", pred_has_director(conn, "Martin Scorsese")),
-        Question("director_fincher", "Est-ce que c'est réalisé par David Fincher ?", pred_has_director(conn, "David Fincher")),
-        Question("director_cameron", "Est-ce que c'est réalisé par James Cameron ?", pred_has_director(conn, "James Cameron")),
-        Question("director_jackson", "Est-ce que c'est réalisé par Peter Jackson ?", pred_has_director(conn, "Peter Jackson")),
-        Question("director_ridley_scott", "Est-ce que c'est réalisé par Ridley Scott ?", pred_has_director(conn, "Ridley Scott")),
-        Question("director_chris_columbus", "Est-ce que c'est réalisé par Chris Columbus ?", pred_has_director(conn, "Chris Columbus")),  # NOUVEAU: Harry Potter
-        Question("director_david_yates", "Est-ce que c'est réalisé par David Yates ?", pred_has_director(conn, "David Yates")),  # NOUVEAU: Harry Potter
+        Question("language_en",  "Le film est-il en anglais ?",           pred_language("en")),
+        Question("language_fr",  "Le film est-il en français ?",          pred_language("fr")),
+        Question("language_ja",  "Le film est-il en japonais ?",          pred_language("ja")),
+        Question("language_es",  "Le film est-il en espagnol ?",          pred_language("es")),
+        Question("language_de",  "Le film est-il en allemand ?",          pred_language("de")),
+        Question("language_it",  "Le film est-il en italien ?",           pred_language("it")),
+        Question("language_ko",  "Le film est-il en coréen ?",            pred_language("ko")),
+        Question("language_zh",  "Le film est-il en chinois (mandarin/cantonais) ?", pred_language("zh")),
+        Question("language_pt",  "Le film est-il en portugais ?",         pred_language("pt")),
+        Question("language_ru",  "Le film est-il en russe ?",             pred_language("ru")),
 
-        # FRANCHISES POPULAIRES - QUESTIONS AMÉLIORÉES ET AJOUTS
-        Question("franchise_marvel", "Est-ce un film Marvel (MCU) ?", pred_franchise_name(conn, "Marvel")),
-        Question("franchise_star_wars", "Est-ce un film Star Wars ?", pred_franchise_name(conn, "Star Wars")),
-        Question("franchise_harry_potter", "Est-ce un film Harry Potter ?", pred_is_harry_potter(conn)),  # AMÉLIORÉ avec fonction spécifique
-        Question("franchise_wizarding_world", "Est-ce un film du Monde des Sorciers (Harry Potter/Fantastic Beasts) ?", pred_franchise_name(conn, "Wizarding World")),  # NOUVEAU
-        Question("franchise_lord_rings", "Est-ce un film Le Seigneur des Anneaux ?", pred_franchise_name(conn, "Lord of the Rings")),
-        Question("franchise_hobbit", "Est-ce un film Le Hobbit ?", pred_franchise_name(conn, "Hobbit")),  # NOUVEAU
-        Question("franchise_batman", "Est-ce un film Batman ?", pred_franchise_name(conn, "Batman")),
-        Question("franchise_bond", "Est-ce un film James Bond ?", pred_franchise_name(conn, "James Bond")),
-        Question("franchise_jurassic", "Est-ce un film Jurassic Park/World ?", pred_franchise_name(conn, "Jurassic")),
-        Question("franchise_fast_furious", "Est-ce un film Fast and Furious ?", pred_franchise_name(conn, "Fast")),
-        Question("franchise_pirates", "Est-ce un film Pirates des Caraïbes ?", pred_franchise_name(conn, "Pirates of the Caribbean")),  # NOUVEAU
-        Question("franchise_xmen", "Est-ce un film X-Men ?", pred_franchise_name(conn, "X-Men")),  # NOUVEAU
-        Question("franchise_avengers", "Est-ce un film Avengers ?", pred_franchise_name(conn, "Avengers")),  # NOUVEAU
-        Question("franchise_dc", "Est-ce un film DC Comics ?", pred_franchise_name(conn, "DC")),  # NOUVEAU
+        # ─────────────────────────────────────────────
+        # SUCCÈS / BUDGET / POPULARITÉ
+        # ─────────────────────────────────────────────
+        Question("very_popular",    "Est-ce un film très connu / culte du grand public ?",     pred_popularity_ge(80)),
+        Question("popular",         "Est-ce un film populaire (mais pas forcément culte) ?",   pred_popularity_ge(50)),
+        Question("big_budget",      "Est-ce un film à gros budget (blockbuster, > 50M$) ?",    pred_budget_ge(conn, 50_000_000)),
+        Question("small_budget",    "Est-ce un film à petit budget (< 10M$) ?",
+                 pred_budget_lt(conn, 10_000_000), excludes=frozenset({"big_budget"})),
+        Question("box_office_hit",  "A-t-il cartonné au box-office (> 100M$ de recettes) ?",  pred_revenue_ge(conn, 100_000_000)),
+        Question("is_indie",        "Est-ce un film indépendant / art et essai ?",
+                 pred_is_indie(conn), excludes=frozenset({"big_budget"})),
 
+        # ─────────────────────────────────────────────
+        # FRANCHISE / UNIVERS
+        # ─────────────────────────────────────────────
+        Question("is_saga",      "Le film fait-il partie d'une saga / série (avec suite ou préquel) ?", pred_is_saga(conn)),
+        Question("is_standalone","Est-ce un film unique (pas de suite) ?",                    pred_not_saga(conn)),
+
+        Question("franchise_marvel",    "Est-ce un film du MCU (Marvel Studios) ?",            pred_franchise_name(conn, "Marvel")),
+        Question("franchise_dc",        "Est-ce un film DC Comics ?",                          pred_franchise_name(conn, "DC")),
+        Question("franchise_star_wars", "Est-ce un film Star Wars ?",                          pred_franchise_name(conn, "Star Wars")),
+        Question("franchise_harry_potter","Est-ce un film Harry Potter ?",                     pred_is_harry_potter(conn)),
+        Question("franchise_lotr",      "Est-ce Le Seigneur des Anneaux ou Le Hobbit ?",
+                 lambda m: (lambda a, b: True if a is True or b is True else (False if a is False and b is False else None))(
+                     pred_franchise_name(conn, "Lord of the Rings")(m), pred_franchise_name(conn, "Hobbit")(m))),
+        Question("franchise_bond",      "Est-ce un film James Bond ?",                         pred_franchise_name(conn, "James Bond")),
+        Question("franchise_jurassic",  "Est-ce un film Jurassic Park / World ?",              pred_franchise_name(conn, "Jurassic")),
+        Question("franchise_fast",      "Est-ce un film Fast & Furious ?",                     pred_franchise_name(conn, "Fast")),
+        Question("franchise_pirates",   "Est-ce un film Pirates des Caraïbes ?",               pred_franchise_name(conn, "Pirates of the Caribbean")),
+        Question("franchise_xmen",      "Est-ce un film X-Men ?",                              pred_franchise_name(conn, "X-Men")),
+        Question("franchise_mission_impossible","Est-ce un film Mission: Impossible ?",        pred_franchise_name(conn, "Mission: Impossible")),
+        Question("franchise_indiana_jones","Est-ce un film Indiana Jones ?",                   pred_franchise_name(conn, "Indiana Jones")),
+        Question("franchise_terminator","Est-ce un film Terminator ?",                         pred_franchise_name(conn, "Terminator")),
+        Question("franchise_alien",     "Est-ce un film Alien ?",                              pred_franchise_name(conn, "Alien")),
+        Question("franchise_matrix",    "Est-ce un film Matrix ?",                             pred_franchise_name(conn, "Matrix")),
+        Question("franchise_rocky",     "Est-ce un film Rocky ou Creed ?",
+                 lambda m: (lambda a, b: True if a is True or b is True else (False if a is False and b is False else None))(
+                     pred_franchise_name(conn, "Rocky")(m), pred_franchise_name(conn, "Creed")(m))),
+        Question("franchise_transformers","Est-ce un film Transformers ?",                     pred_franchise_name(conn, "Transformers")),
+        Question("franchise_planet_apes","Est-ce un film La Planète des Singes ?",             pred_franchise_name(conn, "Planet of the Apes")),
+        Question("franchise_lethal_weapon","Est-ce un film L'Arme Fatale ?",                   pred_franchise_name(conn, "Lethal Weapon")),
+        Question("franchise_back_future","Est-ce un film Retour vers le Futur ?",              pred_franchise_name(conn, "Back to the Future")),
+        Question("franchise_godfather", "Est-ce un film Le Parrain ?",                        pred_franchise_name(conn, "Godfather")),
+        Question("franchise_die_hard",  "Est-ce un film Die Hard ?",                           pred_franchise_name(conn, "Die Hard")),
+        Question("franchise_john_wick", "Est-ce un film John Wick ?",                          pred_franchise_name(conn, "John Wick")),
+        Question("franchise_bourne",    "Est-ce un film Jason Bourne ?",                       pred_franchise_name(conn, "Bourne")),
+        Question("franchise_toy_story", "Est-ce un film Toy Story ?",                          pred_franchise_name(conn, "Toy Story")),
+        Question("franchise_ice_age",   "Est-ce un film L'Âge de Glace ?",                     pred_franchise_name(conn, "Ice Age")),
+        Question("franchise_shrek",     "Est-ce un film Shrek ?",                              pred_franchise_name(conn, "Shrek")),
+        Question("franchise_despicable","Est-ce un film Moi, Moche et Méchant / Minions ?",   pred_franchise_name(conn, "Despicable Me")),
+        Question("franchise_hunger_games","Est-ce un film Hunger Games ?",                    pred_franchise_name(conn, "Hunger Games")),
+        Question("franchise_twilight",  "Est-ce un film Twilight ?",                           pred_franchise_name(conn, "Twilight")),
+
+        # ─────────────────────────────────────────────
         # PERSONNAGES ICONIQUES
-        Question("char_batman", "Le personnage principal est-il Batman ?", pred_main_character_name(conn, "Batman")),
-        Question("char_superman", "Le personnage principal est-il Superman ?", pred_main_character_name(conn, "Superman")),
-        Question("char_spider_man", "Le personnage principal est-il Spider-Man ?", pred_main_character_name(conn, "Spider")),
-        Question("char_iron_man", "Le personnage principal est-il Iron Man ?", pred_main_character_name(conn, "Iron Man")),
-        Question("char_captain_america", "Le personnage principal est-il Captain America ?", pred_main_character_name(conn, "Captain America")),
-        Question("char_joker", "Le personnage principal est-il le Joker ?", pred_main_character_name(conn, "Joker")),
-        Question("char_terminator", "Le personnage principal est-il le Terminator ?", pred_main_character_name(conn, "Terminator")),
-        Question("char_harry_potter", "Le personnage principal est-il Harry Potter ?", pred_main_character_name(conn, "Harry Potter")),  # NOUVEAU
-        Question("char_frodo", "Le personnage principal est-il Frodon/Frodo ?", pred_main_character_name(conn, "Frodo")),  # NOUVEAU
-        Question("char_jack_sparrow", "Le personnage principal est-il Jack Sparrow ?", pred_main_character_name(conn, "Jack Sparrow")),  # NOUVEAU
+        # ─────────────────────────────────────────────
+        Question("char_batman",    "Le personnage principal est-il Batman ?",                  pred_main_character_name(conn, "Batman")),
+        Question("char_superman",  "Le personnage principal est-il Superman ?",                pred_main_character_name(conn, "Superman")),
+        Question("char_spiderman", "Le personnage principal est-il Spider-Man ?",             pred_main_character_name(conn, "Spider")),
+        Question("char_ironman",   "Le personnage principal est-il Iron Man ?",               pred_main_character_name(conn, "Iron Man")),
+        Question("char_joker",     "Le personnage principal est-il le Joker ?",               pred_main_character_name(conn, "Joker")),
+        Question("char_terminator","Le personnage principal est-il le Terminator ?",          pred_main_character_name(conn, "Terminator")),
+        Question("char_harry_p",   "Le personnage principal est-il Harry Potter ?",           pred_main_character_name(conn, "Harry Potter")),
+        Question("char_frodo",     "Le personnage principal est-il Frodon ?",                 pred_main_character_name(conn, "Frodo")),
+        Question("char_jack_sparrow","Le personnage principal est-il Jack Sparrow ?",         pred_main_character_name(conn, "Jack Sparrow")),
+        Question("char_james_bond","Le personnage principal est-il James Bond ?",             pred_main_character_name(conn, "James Bond")),
+        Question("char_indiana_j", "Le personnage principal est-il Indiana Jones ?",          pred_main_character_name(conn, "Indiana Jones")),
+        Question("char_wolverine", "Le personnage principal est-il Wolverine ?",              pred_main_character_name(conn, "Wolverine")),
 
-        # ACTEURS CÉLÈBRES
-        Question("actor_tom_hanks", "Est-ce que Tom Hanks joue dedans ?", pred_actor_in_cast(conn, "Tom Hanks")),
-        Question("actor_leonardo_dicaprio", "Est-ce que Leonardo DiCaprio joue dedans ?", pred_actor_in_cast(conn, "Leonardo DiCaprio")),
-        Question("actor_brad_pitt", "Est-ce que Brad Pitt joue dedans ?", pred_actor_in_cast(conn, "Brad Pitt")),
-        Question("actor_meryl_streep", "Est-ce que Meryl Streep joue dedans ?", pred_actor_in_cast(conn, "Meryl Streep")),
-        Question("actor_robert_de_niro", "Est-ce que Robert De Niro joue dedans ?", pred_actor_in_cast(conn, "Robert De Niro")),
-        Question("actor_al_pacino", "Est-ce que Al Pacino joue dedans ?", pred_actor_in_cast(conn, "Al Pacino")),
-        Question("actor_johnny_depp", "Est-ce que Johnny Depp joue dedans ?", pred_actor_in_cast(conn, "Johnny Depp")),
-        Question("actor_will_smith", "Est-ce que Will Smith joue dedans ?", pred_actor_in_cast(conn, "Will Smith")),
-        Question("actor_denzel_washington", "Est-ce que Denzel Washington joue dedans ?", pred_actor_in_cast(conn, "Denzel Washington")),
-        Question("actor_morgan_freeman", "Est-ce que Morgan Freeman joue dedans ?", pred_actor_in_cast(conn, "Morgan Freeman")),
-        Question("actor_samuel_l_jackson", "Est-ce que Samuel L. Jackson joue dedans ?", pred_actor_in_cast(conn, "Samuel L. Jackson")),
-        Question("actor_scarlett_johansson", "Est-ce que Scarlett Johansson joue dedans ?", pred_actor_in_cast(conn, "Scarlett Johansson")),
-        Question("actor_daniel_radcliffe", "Est-ce que Daniel Radcliffe joue dedans ?", pred_actor_in_cast(conn, "Daniel Radcliffe")),  # NOUVEAU: Harry Potter
-        Question("actor_emma_watson", "Est-ce que Emma Watson joue dedans ?", pred_actor_in_cast(conn, "Emma Watson")),  # NOUVEAU: Harry Potter
-        Question("actor_rupert_grint", "Est-ce que Rupert Grint joue dedans ?", pred_actor_in_cast(conn, "Rupert Grint")),  # NOUVEAU: Harry Potter
-        Question("actor_alan_rickman", "Est-ce que Alan Rickman joue dedans ?", pred_actor_in_cast(conn, "Alan Rickman")),  # NOUVEAU: Harry Potter
-        Question("actor_elijah_wood", "Est-ce que Elijah Wood joue dedans ?", pred_actor_in_cast(conn, "Elijah Wood")),  # NOUVEAU: LOTR
-        Question("actor_orlando_bloom", "Est-ce que Orlando Bloom joue dedans ?", pred_actor_in_cast(conn, "Orlando Bloom")),  # NOUVEAU: LOTR/Pirates
+        # ─────────────────────────────────────────────
+        # RÉALISATEURS
+        # ─────────────────────────────────────────────
+        Question("director_nolan",      "Réalisé par Christopher Nolan ?",    pred_has_director(conn, "Christopher Nolan")),
+        Question("director_spielberg",  "Réalisé par Steven Spielberg ?",     pred_has_director(conn, "Steven Spielberg")),
+        Question("director_tarantino",  "Réalisé par Quentin Tarantino ?",    pred_has_director(conn, "Quentin Tarantino")),
+        Question("director_scorsese",   "Réalisé par Martin Scorsese ?",      pred_has_director(conn, "Martin Scorsese")),
+        Question("director_fincher",    "Réalisé par David Fincher ?",        pred_has_director(conn, "David Fincher")),
+        Question("director_cameron",    "Réalisé par James Cameron ?",        pred_has_director(conn, "James Cameron")),
+        Question("director_jackson",    "Réalisé par Peter Jackson ?",        pred_has_director(conn, "Peter Jackson")),
+        Question("director_ridley",     "Réalisé par Ridley Scott ?",         pred_has_director(conn, "Ridley Scott")),
+        Question("director_kubrick",    "Réalisé par Stanley Kubrick ?",      pred_has_director(conn, "Stanley Kubrick")),
+        Question("director_hitchcock",  "Réalisé par Alfred Hitchcock ?",     pred_has_director(conn, "Alfred Hitchcock")),
+        Question("director_lynch",      "Réalisé par David Lynch ?",          pred_has_director(conn, "David Lynch")),
+        Question("director_wachowski",  "Réalisé par les Wachowski ?",
+                 lambda m: (lambda a, b: True if a is True or b is True else (None if a is None or b is None else False))(
+                     pred_has_director(conn, "Lana Wachowski")(m), pred_has_director(conn, "Lilly Wachowski")(m))),
+        Question("director_russo",      "Réalisé par les frères Russo ?",
+                 lambda m: (lambda a, b: True if a is True or b is True else (None if a is None or b is None else False))(
+                     pred_has_director(conn, "Anthony Russo")(m), pred_has_director(conn, "Joe Russo")(m))),
+        Question("director_zemeckis",   "Réalisé par Robert Zemeckis ?",      pred_has_director(conn, "Robert Zemeckis")),
+        Question("director_lucas",      "Réalisé par George Lucas ?",         pred_has_director(conn, "George Lucas")),
+        Question("director_coppola",    "Réalisé par Francis Ford Coppola ?", pred_has_director(conn, "Francis Ford Coppola")),
+        Question("director_burton",     "Réalisé par Tim Burton ?",           pred_has_director(conn, "Tim Burton")),
+        Question("director_verhoven",   "Réalisé par Paul Verhoeven ?",       pred_has_director(conn, "Paul Verhoeven")),
+        Question("director_anderson_wes","Réalisé par Wes Anderson ?",        pred_has_director(conn, "Wes Anderson")),
+        Question("director_villeneuve", "Réalisé par Denis Villeneuve ?",     pred_has_director(conn, "Denis Villeneuve")),
+        Question("director_favreau",    "Réalisé par Jon Favreau ?",          pred_has_director(conn, "Jon Favreau")),
+        Question("director_snyder",     "Réalisé par Zack Snyder ?",          pred_has_director(conn, "Zack Snyder")),
+        Question("director_bay",        "Réalisé par Michael Bay ?",          pred_has_director(conn, "Michael Bay")),
+        Question("director_lee_ang",    "Réalisé par Ang Lee ?",              pred_has_director(conn, "Ang Lee")),
+        Question("director_miyazaki",   "Réalisé par Hayao Miyazaki ?",       pred_has_director(conn, "Hayao Miyazaki")),
+        Question("director_luc_besson", "Réalisé par Luc Besson ?",           pred_has_director(conn, "Luc Besson")),
+        Question("director_gondry",     "Réalisé par Michel Gondry ?",        pred_has_director(conn, "Michel Gondry")),
+        Question("director_dolan",      "Réalisé par Xavier Dolan ?",         pred_has_director(conn, "Xavier Dolan")),
+        Question("director_cuaron",     "Réalisé par Alfonso Cuarón ?",       pred_has_director(conn, "Alfonso Cuarón")),
+        Question("director_bong",       "Réalisé par Bong Joon-ho ?",         pred_has_director(conn, "Bong Joon-ho")),
+        Question("director_park_chan",  "Réalisé par Park Chan-wook ?",       pred_has_director(conn, "Park Chan-wook")),
 
-        # NOUVEAUX THÈMES SPÉCIFIQUES
-        Question("theme_school", "L'histoire se passe-t-elle dans une école ?", pred_keyword(conn, "school")),  # NOUVEAU: Harry Potter
-        Question("theme_magic_school", "L'histoire se passe-t-elle dans une école de magie ?", pred_keyword(conn, "magic")),  # NOUVEAU: Harry Potter
-        Question("theme_wizard", "Y a-t-il des sorciers/magiciens ?", pred_keyword(conn, "wizard")),  # NOUVEAU: Harry Potter
-        Question("theme_prophecy", "Y a-t-il une prophétie importante ?", pred_keyword(conn, "prophecy")),  # NOUVEAU
-        Question("theme_chosen_one", "Le héros est-il un élu/un choisi ?", pred_keyword(conn, "chosen one")),  # NOUVEAU
-        Question("theme_good_vs_evil", "C'est une histoire du bien contre le mal ?", pred_keyword(conn, "good versus evil")),  # NOUVEAU
-        Question("theme_friendship", "L'amitié est-elle un thème central ?", pred_keyword(conn, "friendship")),  # NOUVEAU
-        Question("theme_coming_of_age", "C'est une histoire d'apprentissage/passage à l'âge adulte ?", pred_keyword(conn, "coming of age")),  # NOUVEAU
+        # ─────────────────────────────────────────────
+        # ACTEURS (sélection resserrée — les plus emblématiques)
+        # ─────────────────────────────────────────────
+        Question("actor_hanks",      "Tom Hanks joue-t-il dedans ?",          pred_actor_in_cast(conn, "Tom Hanks")),
+        Question("actor_dicaprio",   "Leonardo DiCaprio joue-t-il dedans ?",  pred_actor_in_cast(conn, "Leonardo DiCaprio")),
+        Question("actor_pitt",       "Brad Pitt joue-t-il dedans ?",          pred_actor_in_cast(conn, "Brad Pitt")),
+        Question("actor_de_niro",    "Robert De Niro joue-t-il dedans ?",     pred_actor_in_cast(conn, "Robert De Niro")),
+        Question("actor_pacino",     "Al Pacino joue-t-il dedans ?",          pred_actor_in_cast(conn, "Al Pacino")),
+        Question("actor_cruise",     "Tom Cruise joue-t-il dedans ?",         pred_actor_in_cast(conn, "Tom Cruise")),
+        Question("actor_will_smith", "Will Smith joue-t-il dedans ?",         pred_actor_in_cast(conn, "Will Smith")),
+        Question("actor_freeman",    "Morgan Freeman joue-t-il dedans ?",     pred_actor_in_cast(conn, "Morgan Freeman")),
+        Question("actor_sjackson",   "Samuel L. Jackson joue-t-il dedans ?",  pred_actor_in_cast(conn, "Samuel L. Jackson")),
+        Question("actor_schwarzenegger","Arnold Schwarzenegger joue-t-il dedans ?", pred_actor_in_cast(conn, "Arnold Schwarzenegger")),
+        Question("actor_ford",       "Harrison Ford joue-t-il dedans ?",      pred_actor_in_cast(conn, "Harrison Ford")),
+        Question("actor_johansson",  "Scarlett Johansson joue-t-elle dedans ?", pred_actor_in_cast(conn, "Scarlett Johansson")),
+        Question("actor_blanchett",  "Cate Blanchett joue-t-elle dedans ?",   pred_actor_in_cast(conn, "Cate Blanchett")),
+        Question("actor_depp",       "Johnny Depp joue-t-il dedans ?",        pred_actor_in_cast(conn, "Johnny Depp")),
+        Question("actor_reeves",     "Keanu Reeves joue-t-il dedans ?",       pred_actor_in_cast(conn, "Keanu Reeves")),
+        Question("actor_downey",     "Robert Downey Jr. joue-t-il dedans ?",  pred_actor_in_cast(conn, "Robert Downey Jr.")),
+        Question("actor_jackman",    "Hugh Jackman joue-t-il dedans ?",       pred_actor_in_cast(conn, "Hugh Jackman")),
+        Question("actor_radcliffe",  "Daniel Radcliffe joue-t-il dedans ?",   pred_actor_in_cast(conn, "Daniel Radcliffe")),
+        Question("actor_elijah_wood","Elijah Wood joue-t-il dedans ?",        pred_actor_in_cast(conn, "Elijah Wood")),
+
+        # ─────────────────────────────────────────────
+        # JOKERS TITRE (dernier recours)
+        # ─────────────────────────────────────────────
+        Question("joker_title_a_d", "Le titre commence-t-il par A, B, C ou D ?",
+                 lambda m: (lambda a,b,c,d: True if any(x is True for x in [a,b,c,d]) else (None if all(x is None for x in [a,b,c,d]) else False))(
+                     pred_title_starts_with("A")(m), pred_title_starts_with("B")(m),
+                     pred_title_starts_with("C")(m), pred_title_starts_with("D")(m))),
+        Question("joker_title_e_h", "Le titre commence-t-il par E, F, G ou H ?",
+                 lambda m: (lambda a,b,c,d: True if any(x is True for x in [a,b,c,d]) else (None if all(x is None for x in [a,b,c,d]) else False))(
+                     pred_title_starts_with("E")(m), pred_title_starts_with("F")(m),
+                     pred_title_starts_with("G")(m), pred_title_starts_with("H")(m))),
+        Question("joker_title_i_l", "Le titre commence-t-il par I, J, K ou L ?",
+                 lambda m: (lambda a,b,c,d: True if any(x is True for x in [a,b,c,d]) else (None if all(x is None for x in [a,b,c,d]) else False))(
+                     pred_title_starts_with("I")(m), pred_title_starts_with("J")(m),
+                     pred_title_starts_with("K")(m), pred_title_starts_with("L")(m))),
+        Question("joker_title_m_p", "Le titre commence-t-il par M, N, O ou P ?",
+                 lambda m: (lambda a,b,c,d: True if any(x is True for x in [a,b,c,d]) else (None if all(x is None for x in [a,b,c,d]) else False))(
+                     pred_title_starts_with("M")(m), pred_title_starts_with("N")(m),
+                     pred_title_starts_with("O")(m), pred_title_starts_with("P")(m))),
+        Question("joker_title_q_t", "Le titre commence-t-il par Q, R, S ou T ?",
+                 lambda m: (lambda a,b,c,d: True if any(x is True for x in [a,b,c,d]) else (None if all(x is None for x in [a,b,c,d]) else False))(
+                     pred_title_starts_with("Q")(m), pred_title_starts_with("R")(m),
+                     pred_title_starts_with("S")(m), pred_title_starts_with("T")(m))),
+        Question("joker_title_u_z", "Le titre commence-t-il par U, V, W, X, Y ou Z ?",
+                 lambda m: (lambda a,b,c,d,e,f: True if any(x is True for x in [a,b,c,d,e,f]) else (None if all(x is None for x in [a,b,c,d,e,f]) else False))(
+                     pred_title_starts_with("U")(m), pred_title_starts_with("V")(m), pred_title_starts_with("W")(m),
+                     pred_title_starts_with("X")(m), pred_title_starts_with("Y")(m), pred_title_starts_with("Z")(m))),
     ]
 
 
@@ -1765,39 +1911,71 @@ def build_dynamic_year_questions(
     asked: Set[str],
 ) -> List[Question]:
     """
-    STRICT MODE: Génère des questions d'années spécifiques pour TOUS les candidats.
-    Plus on a peu de candidats, plus on génère de questions précises.
+    Génère des questions de date par DICHOTOMIE au lieu d'années individuelles.
+    
+    Principe : trouver la coupure temporelle qui divise le pool en deux moitiés égales,
+    puis proposer UN SEUL pivot (ex: "avant ou après 2005 ?").
+    Pas de spam "sorti en 2003 ? 2004 ? 2005 ?".
     """
-    from collections import Counter
-    
-    # STRICT MODE: Générer jusqu'à 100 candidats (au lieu de 50)
-    if len(candidates) > 100 or len(candidates) < 2:
+    if len(candidates) > 200 or len(candidates) < 2:
         return []
-    
-    year_counter: Counter = Counter()
-    
-    for m in candidates:
-        y = safe_year(m.get("release_date"))
-        if y is not None:
-            year_counter[y] += 1
-    
+
+    # Collecter toutes les années disponibles, triées
+    years = sorted(
+        y for m in candidates
+        if (y := safe_year(m.get("release_date"))) is not None
+    )
+
+    if len(years) < 2:
+        return []
+
+    min_year = years[0]
+    max_year = years[-1]
+
+    # Si toutes les années sont identiques, rien à faire
+    if min_year == max_year:
+        return []
+
     questions: List[Question] = []
-    
-    # STRICT MODE: Générer pour toutes les années (même avec 1 seul film)
-    max_questions = 20 if len(candidates) <= 10 else 15
-    
-    for year, count in year_counter.most_common(max_questions):
-        # STRICT MODE: Même 1 seul film suffit (au lieu de 2)
-        if count < 1:
-            continue
-        
-        key = f"year_{year}"
-        if key in asked:
-            continue
-        
-        text = f"Est-ce que c'est sorti en {year} ?"
-        questions.append(Question(key, text, pred_exact_year(year)))
-    
+    n = len(years)
+
+    # --- PIVOT MÉDIAN : la coupure qui équilibre le mieux le pool ---
+    median_year = years[n // 2]
+
+    # On évite les clés déjà posées et les pivots redondants
+    # (si min == median ou median == max il n'y a pas de vraie coupure)
+    if min_year < median_year:
+        key = f"before_year_{median_year}"
+        if key not in asked:
+            text = f"Le film est-il sorti avant {median_year} ?"
+            questions.append(Question(key, text, pred_before_year(median_year)))
+
+    # --- QUELQUES PIVOTS SUPPLÉMENTAIRES pour affiner (décennies entières) ---
+    # On ajoute les décennies présentes dans le pool mais pas encore demandées
+    decades_in_pool = sorted({(y // 10) * 10 for y in years})
+    for decade in decades_in_pool:
+        # Question "sorti dans les années XXXX ?" (ex: "dans les années 1990 ?")
+        key = f"decade_{decade}s"
+        if key not in asked:
+            yes_count = sum(1 for y in years if decade <= y < decade + 10)
+            # Seulement si cette décennie est minoritaire (discriminante)
+            if 0 < yes_count < n:
+                text = f"Le film est-il sorti dans les années {decade} ({decade}–{decade+9}) ?"
+                questions.append(Question(key, text, pred_decade(decade)))
+
+    # --- PIVOT PRÉCIS si pool très petit (≤ 10 films) ---
+    # On propose l'année exacte UNIQUEMENT pour la médiane, pas pour chaque film
+    if len(candidates) <= 10 and min_year < max_year:
+        # Chercher l'année qui divise le mieux (la plus proche de la moitié)
+        best_pivot = years[n // 2]
+        key_exact = f"exact_year_pivot_{best_pivot}"
+        if key_exact not in asked:
+            before = sum(1 for y in years if y < best_pivot)
+            after  = sum(1 for y in years if y >= best_pivot)
+            if before > 0 and after > 0:
+                text = f"Le film est-il sorti en {best_pivot} ou après ?"
+                questions.append(Question(key_exact, text, pred_after_year(best_pivot)))
+
     return questions
 
 
@@ -1856,18 +2034,8 @@ def build_binary_disambiguation_questions(
                             lambda m, wc=word_count: len(str(m.get("title", "")).split()) == wc))
                         added_keys.add(key)
         
-        # 3. Décennie précise
-        if year:
-            decade = (year // 10) * 10
-            key = f"bin_decade_{decade}"
-            if key not in asked and key not in added_keys:
-                yes_count = sum(1 for cand in candidates 
-                               if safe_year(cand.get("release_date")) and
-                               decade <= safe_year(cand.get("release_date")) < decade + 10)  # type: ignore
-                if 0 < yes_count < n:
-                    text = f"Est-ce sorti dans les années {decade} ?"
-                    questions.append(Question(key, text, pred_decade(decade)))
-                    added_keys.add(key)
+        # 3. Pivot temporel (médiane des années du pool) — une seule question, pas par film
+        # (géré globalement par build_dynamic_year_questions, on évite le doublon ici)
         
         # 4. Acteur principal unique
         cast = details.get("credits", {}).get("cast", [])
