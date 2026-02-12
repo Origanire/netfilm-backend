@@ -132,8 +132,8 @@ class MultiAIProvider:
         payload = {
             "contents": contents,
             "generationConfig": {
-                "temperature": 0.3,   # Plus bas = réponses plus stables et prévisibles
-                "maxOutputTokens": 80, # Court → rapide → juste QUESTION: ou GUESS:
+                "temperature": 0.1,    # Très bas = réponses prévisibles et formatées
+                "maxOutputTokens": 150, # Assez pour "QUESTION: Est-ce un film d'animation ?"
             },
         }
 
@@ -191,7 +191,7 @@ class MultiAIProvider:
         }
         payload = {
             "model": CLAUDE_MODEL,
-            "max_tokens": 80,
+            "max_tokens": 150,
             "messages": self.conversation_history,
         }
 
@@ -217,8 +217,8 @@ class MultiAIProvider:
         payload = {
             "model": OPENAI_MODEL,
             "messages": self.conversation_history,
-            "max_tokens": 80,
-            "temperature": 0.3,
+            "max_tokens": 150,
+            "temperature": 0.1,
         }
 
         resp = self._post_with_retry(OPENAI_API_URL, payload, headers)
@@ -251,19 +251,24 @@ class AkinatorAI:
 
     # Prompt système minimal envoyé UNE SEULE FOIS au début
     SYSTEM_PROMPT = """Tu joues à Akinator pour deviner un film.
-Règles STRICTES:
-- Réponds UNIQUEMENT avec l'un de ces deux formats:
-  QUESTION: <une question oui/non en français> ?
-  GUESS: <titre exact du film>
-- Une seule ligne, rien d'autre, aucun commentaire
-- Commence par des questions larges (genre, époque, pays, animé ou non)
-- Propose un film (GUESS:) quand tu es très confiant
-- Ne répète jamais une question déjà posée
 
-Exemples valides:
+RÈGLE ABSOLUE: chaque réponse doit être UNE SEULE ligne complète, exactement dans l'un de ces deux formats:
+QUESTION: <question complète en français se terminant par ?> 
+GUESS: <titre complet du film>
+
+INTERDIT: répondre avec une phrase incomplète, couper la question, ajouter du texte en dehors du format.
+
+Exemples CORRECTS:
 QUESTION: Est-ce un film d'animation ?
 QUESTION: Le film est-il sorti avant l'an 2000 ?
-GUESS: Le Roi Lion"""
+QUESTION: Y a-t-il des super-héros dans ce film ?
+GUESS: Le Roi Lion
+GUESS: Inception
+
+Exemples INCORRECTS (ne jamais faire ça):
+Est-ce
+QUESTION: Est-
+un film d'animation ?"""
 
     def __init__(self, provider: str = "gemini"):
         self.ai = MultiAIProvider(provider)
