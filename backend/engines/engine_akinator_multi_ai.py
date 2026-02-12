@@ -1,42 +1,38 @@
 #!/usr/bin/env python3
-import json
 import os
 import sqlite3
-from pathlib import Path
+import time
 from typing import Dict, List, Optional, Tuple
 import requests
 
 # =========================
-# CONFIGURATION MULTI-IA
+# CONFIGURATION
 # =========================
 
-# URLs API
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 OPENAI_API_URL    = "https://api.openai.com/v1/chat/completions"
+GEMINI_BASE_URL   = "https://generativelanguage.googleapis.com/v1beta/models"
 
-# Modèles
 CLAUDE_MODEL = "claude-opus-4-5-20251101"
 OPENAI_MODEL = "gpt-4o-mini"
 
-# Gemini : liste de fallback (si quota 429 sur le 1er, on essaie le suivant)
-# Noms exacts vérifiés via ListModels avec ta clé API
-GEMINI_MODELS_FALLBACK = [
-    "gemini-2.0-flash-lite",  # Le plus léger, quota le plus généreux
-    "gemini-2.0-flash",       # Standard, bon quota
-    "gemini-flash-latest",    # Alias stable
+# Modèles Gemini dans l'ordre de fallback
+GEMINI_MODELS = [
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-flash-latest",
 ]
 
-# NOTE: Les clés API sont lues dynamiquement via os.getenv() à chaque appel,
-# pas au chargement du module, pour être sûr que le .env est déjà chargé.
+# Nombre max de tentatives sur erreur 503
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # secondes entre les tentatives
 
 # =========================
 # SQLITE ACCESS
 # =========================
 
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "movies.db")
-
-GENRE_MAP:    Dict[int, str]  = {}
-DETAILS_CACHE: Dict[int, dict] = {}
+GENRE_MAP: Dict[int, str] = {}
 
 def load_genres_from_db(db_path: str) -> None:
     global GENRE_MAP
@@ -50,7 +46,8 @@ def load_genres_from_db(db_path: str) -> None:
     except Exception:
         GENRE_MAP = {}
 
-def discover_movies(db_path: str, limit: int = 500) -> List[dict]:
+def discover_movies(db_path: str, limit: int = 200) -> List[dict]:
+    """Charge les films les plus populaires. Limité à 200 pour réduire la taille du prompt."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -58,10 +55,9 @@ def discover_movies(db_path: str, limit: int = 500) -> List[dict]:
     cursor.execute("SELECT movie_id, genre_id FROM movie_genres")
     movie_genres_map: Dict[int, List[int]] = {}
     for row in cursor.fetchall():
-        mid, gid = row["movie_id"], row["genre_id"]
-        movie_genres_map.setdefault(mid, []).append(gid)
+        movie_genres_map.setdefault(row["movie_id"], []).append(row["genre_id"])
 
-    cursor.execute("SELECT * FROM movies ORDER BY popularity DESC LIMIT ?", (limit,))
+    cursor.execute("SELECT id, title, release_date FROM movies ORDER BY popularity DESC LIMIT ?", (limit,))
     movies = []
     for row in cursor.fetchall():
         movie = dict(row)
@@ -72,7 +68,7 @@ def discover_movies(db_path: str, limit: int = 500) -> List[dict]:
     return movies
 
 # =========================
-# CLASSE IA MULTI-PROVIDER
+# PROVIDER IA
 # =========================
 
 class MultiAIProvider:
@@ -80,11 +76,9 @@ class MultiAIProvider:
     def __init__(self, provider: str = "gemini"):
         self.provider = provider.lower()
         self.conversation_history: List[dict] = []
-
         if self.provider not in ("claude", "gemini", "openai"):
             raise ValueError(f"Provider '{provider}' non supporté. Options: claude, gemini, openai")
 
-    # ---- clés lues dynamiquement ----
     @property
     def _google_key(self) -> str:
         return os.getenv("GOOGLE_API_KEY", "")
@@ -97,12 +91,38 @@ class MultiAIProvider:
     def _openai_key(self) -> str:
         return os.getenv("OPENAI_API_KEY", "")
 
-    # ---- appels API ----
+    def _post_with_retry(self, url: str, payload: dict, headers: dict = None, max_retries: int = MAX_RETRIES) -> requests.Response:
+        """Fait un POST avec retry automatique sur 503/429."""
+        kwargs = {"json": payload, "timeout": 20}
+        if headers:
+            kwargs["headers"] = headers
+
+        for attempt in range(max_retries):
+            resp = requests.post(url, **kwargs)
+
+            # Succès
+            if resp.ok:
+                return resp
+
+            # Erreur temporaire → retry
+            if resp.status_code in (503, 429):
+                if attempt < max_retries - 1:
+                    wait = RETRY_DELAY * (attempt + 1)
+                    print(f"⚠️  HTTP {resp.status_code} (tentative {attempt+1}/{max_retries}), retry dans {wait}s...")
+                    time.sleep(wait)
+                    continue
+
+            # Erreur définitive
+            return resp
+
+        return resp
+
     def _call_gemini(self, user_message: str) -> str:
         api_key = self._google_key
         if not api_key:
             raise ValueError("GOOGLE_API_KEY non configurée dans .env")
 
+        # Construire le contenu (historique + nouveau message)
         contents = []
         for msg in self.conversation_history:
             role = "user" if msg["role"] == "user" else "model"
@@ -111,39 +131,50 @@ class MultiAIProvider:
 
         payload = {
             "contents": contents,
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 512},
+            "generationConfig": {
+                "temperature": 0.3,   # Plus bas = réponses plus stables et prévisibles
+                "maxOutputTokens": 80, # Court → rapide → juste QUESTION: ou GUESS:
+            },
         }
 
-        # Essayer chaque modèle dans l ordre, passer au suivant si quota 429
         last_error = None
-        for model in GEMINI_MODELS_FALLBACK:
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{model}:generateContent?key={api_key}"
-            )
-            resp = requests.post(url, json=payload, timeout=30)
+        for model in GEMINI_MODELS:
+            url = f"{GEMINI_BASE_URL}/{model}:generateContent?key={api_key}"
+            resp = self._post_with_retry(url, payload)
 
             if resp.status_code == 429:
-                print(f"⚠️  Quota dépassé sur {model}, tentative avec le modèle suivant...")
+                print(f"⚠️  Quota dépassé sur {model}, modèle suivant...")
                 last_error = f"Quota 429 sur {model}"
                 continue
 
+            if resp.status_code == 503:
+                print(f"⚠️  {model} indisponible (503), modèle suivant...")
+                last_error = f"Indisponible 503 sur {model}"
+                continue
+
             if not resp.ok:
-                raise RuntimeError(f"Gemini/{model} HTTP {resp.status_code}: {resp.text[:300]}")
+                raise RuntimeError(f"Gemini/{model} HTTP {resp.status_code}: {resp.text[:200]}")
 
             data = resp.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            # Vérifier que la réponse est valide
+            candidates = data.get("candidates", [])
+            if not candidates:
+                print(f"⚠️  Réponse vide de {model}, modèle suivant...")
+                last_error = f"Réponse vide de {model}"
+                continue
+
+            text = candidates[0]["content"]["parts"][0]["text"].strip()
+            if not text:
+                continue
 
             self.conversation_history.append({"role": "user",      "content": user_message})
             self.conversation_history.append({"role": "assistant", "content": text})
-            print(f"✅ Gemini répondu via: {model}")
+            print(f"✅ [{model}] répondu en {len(text)} chars")
             return text
 
-        # Tous les modèles ont échoué avec 429
         raise RuntimeError(
-            f"Quota Gemini dépassé sur tous les modèles ({', '.join(GEMINI_MODELS_FALLBACK)}). "
-            f"Solutions: 1) Attendre minuit UTC 2) Créer une nouvelle clé API Google "
-            f"3) Passer à AI_PROVIDER=claude ou openai dans .env"
+            f"Tous les modèles Gemini ont échoué. Dernier: {last_error}. "
+            f"Réessayez dans quelques minutes."
         )
 
     def _call_claude(self, user_message: str) -> str:
@@ -160,15 +191,15 @@ class MultiAIProvider:
         }
         payload = {
             "model": CLAUDE_MODEL,
-            "max_tokens": 512,
+            "max_tokens": 80,
             "messages": self.conversation_history,
         }
 
-        resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=30)
+        resp = self._post_with_retry(ANTHROPIC_API_URL, payload, headers)
         if not resp.ok:
-            raise RuntimeError(f"Claude HTTP {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"Claude HTTP {resp.status_code}: {resp.text[:200]}")
 
-        text = resp.json()["content"][0]["text"]
+        text = resp.json()["content"][0]["text"].strip()
         self.conversation_history.append({"role": "assistant", "content": text})
         return text
 
@@ -186,20 +217,19 @@ class MultiAIProvider:
         payload = {
             "model": OPENAI_MODEL,
             "messages": self.conversation_history,
-            "max_tokens": 512,
-            "temperature": 0.7,
+            "max_tokens": 80,
+            "temperature": 0.3,
         }
 
-        resp = requests.post(OPENAI_API_URL, headers=headers, json=payload, timeout=30)
+        resp = self._post_with_retry(OPENAI_API_URL, payload, headers)
         if not resp.ok:
-            raise RuntimeError(f"OpenAI HTTP {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"OpenAI HTTP {resp.status_code}: {resp.text[:200]}")
 
-        text = resp.json()["choices"][0]["message"]["content"]
+        text = resp.json()["choices"][0]["message"]["content"].strip()
         self.conversation_history.append({"role": "assistant", "content": text})
         return text
 
     def call_ai(self, user_message: str) -> str:
-        """Appelle l'IA et remonte les erreurs lisiblement."""
         try:
             if self.provider == "gemini":
                 return self._call_gemini(user_message)
@@ -208,83 +238,125 @@ class MultiAIProvider:
             elif self.provider == "openai":
                 return self._call_openai(user_message)
         except Exception as e:
-            # Afficher l'erreur complète dans les logs du serveur
             import traceback
             traceback.print_exc()
             raise RuntimeError(f"Erreur IA ({self.provider}): {e}") from e
 
 
 # =========================
-# MOTEUR DE JEU AKINATOR
+# MOTEUR AKINATOR
 # =========================
 
 class AkinatorAI:
 
+    # Prompt système minimal envoyé UNE SEULE FOIS au début
+    SYSTEM_PROMPT = """Tu joues à Akinator pour deviner un film.
+Règles STRICTES:
+- Réponds UNIQUEMENT avec l'un de ces deux formats:
+  QUESTION: <une question oui/non en français> ?
+  GUESS: <titre exact du film>
+- Une seule ligne, rien d'autre, aucun commentaire
+- Commence par des questions larges (genre, époque, pays, animé ou non)
+- Propose un film (GUESS:) quand tu es très confiant
+- Ne répète jamais une question déjà posée
+
+Exemples valides:
+QUESTION: Est-ce un film d'animation ?
+QUESTION: Le film est-il sorti avant l'an 2000 ?
+GUESS: Le Roi Lion"""
+
     def __init__(self, provider: str = "gemini"):
         self.ai = MultiAIProvider(provider)
+        self.questions_asked: List[str] = []
 
-    def initialize_game(self, movies: List[dict], genre_map: Dict[int, str]) -> str:
-        """Initialise la conversation et retourne la première question."""
+    def initialize_game(self, movies: List[dict], genre_map: Dict[int, str]) -> Tuple[str, str]:
+        """
+        Initialise la conversation.
+        Le résumé des films est envoyé UNE SEULE FOIS ici, pas à chaque question.
+        """
         self.ai.conversation_history = []
+        self.questions_asked = []
 
-        # Résumé compact des films (100 premiers par popularité)
+        # Résumé compact : seulement titre + année + genres principaux
+        # Limité à 50 films pour garder le prompt court
         lines = []
-        for m in movies[:100]:
+        for m in movies[:50]:
             title  = m.get("title", "?")
-            year   = (m.get("release_date") or "")[:4] or "N/A"
-            genres = [genre_map.get(gid, "") for gid in m.get("genre_ids", [])][:3]
-            lines.append(f"{title} ({year}) - {', '.join(g for g in genres if g)}")
-        summary = "\n".join(lines)
+            year   = (m.get("release_date") or "")[:4] or "?"
+            genres = [genre_map.get(gid, "") for gid in m.get("genre_ids", [])][:2]
+            genre_str = "/".join(g for g in genres if g)
+            lines.append(f"{title} ({year}){' - ' + genre_str if genre_str else ''}")
 
-        system_prompt = (
-            f"Tu es un Akinator de films. Tu dois deviner le film auquel l'utilisateur pense "
-            f"en posant des questions oui/non.\n\n"
-            f"RÈGLES STRICTES:\n"
-            f"- Pose UNE seule question à la fois\n"
-            f"- Format obligatoire pour une question : QUESTION: <ta question> ?\n"
-            f"- Format obligatoire pour une proposition : GUESS: <titre exact du film>\n"
-            f"- Commence large (genre, époque, pays) puis affine\n"
-            f"- Propose un film quand tu es très confiant (après 5+ questions)\n"
-            f"- Utilise UNIQUEMENT le format QUESTION: ou GUESS:, rien d'autre\n\n"
-            f"Base de films disponibles ({len(movies)} films, échantillon):\n{summary}\n\n"
-            f"Pose maintenant ta première question."
+        movies_list = "\n".join(lines)
+
+        # Ce premier message contient le contexte complet
+        # Les suivants seront courts (juste la réponse oui/non)
+        first_message = (
+            f"{self.SYSTEM_PROMPT}\n\n"
+            f"Films disponibles (extrait des {len(movies)} films de la base):\n"
+            f"{movies_list}\n\n"
+            f"Pose ta première question."
         )
 
-        response = self.ai.call_ai(system_prompt)
-        return self._parse_response(response)
+        response = self.ai.call_ai(first_message)
+        return self._parse(response)
 
     def answer(self, user_answer: str) -> Tuple[str, str]:
-        """Envoie la réponse de l'utilisateur, retourne (type, contenu)."""
-        response = self.ai.call_ai(f"Réponse: {user_answer}")
-        return self._parse_response(response)
+        """
+        Envoie la réponse. Message très court = API rapide.
+        """
+        # Message minimaliste, l'historique contient déjà tout le contexte
+        response = self.ai.call_ai(user_answer)
+        return self._parse(response)
 
     def confirm(self, is_correct: bool) -> Tuple[str, str]:
-        """Confirme ou infirme la proposition, retourne (type, contenu)."""
         if is_correct:
-            return ("end", "Bravo, j'ai trouvé !")
-        response = self.ai.call_ai("Non, ce n'est pas ce film. Continue à poser des questions.")
-        return self._parse_response(response)
+            return ("end", "J'ai trouvé !")
+        response = self.ai.call_ai("Non")
+        return self._parse(response)
 
-    def _parse_response(self, response: str) -> Tuple[str, str]:
-        """Parse la réponse de l'IA → (type, contenu). type = 'question' ou 'guess'."""
-        # Chercher GUESS: en premier
-        if "GUESS:" in response:
-            content = response.split("GUESS:")[1].strip().split("\n")[0].strip()
-            return ("guess", content)
+    def _parse(self, response: str) -> Tuple[str, str]:
+        """
+        Parse strict : cherche QUESTION: ou GUESS: dans la réponse.
+        Si rien trouvé, force une nouvelle question via l'API.
+        """
+        # Nettoyer la réponse
+        response = response.strip()
 
-        # Chercher QUESTION:
-        if "QUESTION:" in response:
-            content = response.split("QUESTION:")[1].strip().split("\n")[0].strip()
-            return ("question", content)
-
-        # Fallback : prendre la première ligne qui contient un "?"
-        for line in response.strip().splitlines():
+        # Chercher dans chaque ligne
+        for line in response.splitlines():
             line = line.strip()
-            if line and "?" in line:
-                return ("question", line)
+            if line.upper().startswith("GUESS:"):
+                content = line[6:].strip().strip('"').strip("'")
+                if content:
+                    return ("guess", content)
+            if line.upper().startswith("QUESTION:"):
+                content = line[9:].strip()
+                if content:
+                    self.questions_asked.append(content)
+                    return ("question", content)
 
-        # Dernier recours
-        return ("question", response.strip()[:200])
+        # Fallback : si l'IA a répondu n'importe quoi (ex: "ootopie 2*...")
+        # On lui redemande en étant très directif
+        print(f"⚠️  Réponse mal formatée: '{response[:50]}' → redemande...")
+        correction = self.ai.call_ai(
+            "Format incorrect. Réponds UNIQUEMENT avec:\n"
+            "QUESTION: <ta question> ?\nou\nGUESS: <titre du film>"
+        )
+        for line in correction.splitlines():
+            line = line.strip()
+            if line.upper().startswith("GUESS:"):
+                content = line[6:].strip().strip('"').strip("'")
+                if content:
+                    return ("guess", content)
+            if line.upper().startswith("QUESTION:"):
+                content = line[9:].strip()
+                if content:
+                    self.questions_asked.append(content)
+                    return ("question", content)
+
+        # Dernier recours absolu
+        return ("question", "Est-ce un film sorti après 2010 ?")
 
 
 # =========================
@@ -294,20 +366,19 @@ class AkinatorAI:
 class AkinatorSession:
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH, provider: str = "gemini"):
-        self.db_path   = db_path
-        self.provider  = provider
+        self.db_path  = db_path
+        self.provider = provider
         self.ai: Optional[AkinatorAI] = None
         self.question_count = 0
 
     def start(self) -> dict:
         load_genres_from_db(self.db_path)
-        movies = discover_movies(self.db_path, limit=500)
+        movies = discover_movies(self.db_path, limit=200)
 
         self.ai = AkinatorAI(self.provider)
         self.question_count = 0
 
         q_type, content = self.ai.initialize_game(movies, GENRE_MAP)
-
         if q_type == "question":
             self.question_count += 1
 
@@ -323,14 +394,13 @@ class AkinatorSession:
         if self.ai is None:
             return {"status": "error", "message": "Session non initialisée"}
 
-        # Normaliser la réponse
         norm = response.lower().strip()
         if norm in ("y", "yes", "oui"):
-            msg = "oui"
+            msg = "Oui"
         elif norm in ("n", "no", "non"):
-            msg = "non"
+            msg = "Non"
         else:
-            msg = "je ne sais pas"
+            msg = "Je ne sais pas"
 
         q_type, content = self.ai.answer(msg)
         if q_type == "question":
