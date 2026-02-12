@@ -19,10 +19,11 @@ CLAUDE_MODEL = "claude-opus-4-5-20251101"
 OPENAI_MODEL = "gpt-4o-mini"
 
 # Gemini : liste de fallback (si quota 429 sur le 1er, on essaie le suivant)
+# Noms exacts vérifiés via ListModels avec ta clé API
 GEMINI_MODELS_FALLBACK = [
-    "gemini-1.5-flash-latest",   # Stable, tier gratuit généreux
-    "gemini-1.5-flash-8b-latest",# Ultra léger, quota séparé
-    "gemini-pro",                # Ancienne gen stable
+    "gemini-2.0-flash-lite",  # Le plus léger, quota le plus généreux
+    "gemini-2.0-flash",       # Standard, bon quota
+    "gemini-flash-latest",    # Alias stable
 ]
 
 # NOTE: Les clés API sont lues dynamiquement via os.getenv() à chaque appel,
@@ -117,7 +118,7 @@ class MultiAIProvider:
         last_error = None
         for model in GEMINI_MODELS_FALLBACK:
             url = (
-                f"https://generativelanguage.googleapis.com/v1/models/"
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
                 f"{model}:generateContent?key={api_key}"
             )
             resp = requests.post(url, json=payload, timeout=30)
