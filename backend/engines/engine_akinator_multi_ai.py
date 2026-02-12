@@ -20,9 +20,9 @@ OPENAI_MODEL = "gpt-4o-mini"
 
 # Gemini : liste de fallback (si quota 429 sur le 1er, on essaie le suivant)
 GEMINI_MODELS_FALLBACK = [
-    "gemini-1.5-flash",      # Tier gratuit : 1500 req/jour, 15 req/min
-    "gemini-1.5-flash-8b",   # Plus léger, quota séparé
-    "gemini-1.0-pro",        # Ancienne gen, quota séparé
+    "gemini-1.5-flash-latest",   # Stable, tier gratuit généreux
+    "gemini-1.5-flash-8b-latest",# Ultra léger, quota séparé
+    "gemini-pro",                # Ancienne gen stable
 ]
 
 # NOTE: Les clés API sont lues dynamiquement via os.getenv() à chaque appel,
@@ -117,7 +117,7 @@ class MultiAIProvider:
         last_error = None
         for model in GEMINI_MODELS_FALLBACK:
             url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"https://generativelanguage.googleapis.com/v1/models/"
                 f"{model}:generateContent?key={api_key}"
             )
             resp = requests.post(url, json=payload, timeout=30)
