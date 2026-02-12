@@ -389,6 +389,11 @@ def should_diversify(state: 'EngineState', q: Question, max_consecutive: int = 2
     AMÉLIORATION: Max 2 consécutives (au lieu de 3) pour plus de variété.
     """
     q_type = get_question_type(q)
+
+    # NOUVEAU: si on est dans un bloc "focus" (ex: actor) et qu'on n'a pas encore atteint le quota,
+    # on NE pénalise PAS ce type. Sinon la pénalité contredit le comportement "5 d'affilée".
+    if state.focus_type is not None and q_type == state.focus_type and state.focus_count < 5:
+        return False
     
     # Exceptions: TOUJOURS autoriser ces types (prioritaires)
     if q_type in ["language", "validation"]:
@@ -411,6 +416,38 @@ def should_diversify(state: 'EngineState', q: Question, max_consecutive: int = 2
             return True
     
     return False
+
+
+def allowed_by_focus_block(state: Optional['EngineState'], q: Question, block_size: int = 5) -> bool:
+    """Contraint le moteur à poser des questions par blocs de thèmes.
+
+    Règle demandée:
+    - On choisit un thème (type de question) et on en pose jusqu'à `block_size` d'affilée.
+    - Après `block_size`, on est obligé de changer de thème.
+
+    Exceptions:
+    - Les questions de type "language" et "validation" ne cassent pas le bloc et sont toujours autorisées.
+
+    Sécurité:
+    - Si l'état n'est pas fourni, aucune contrainte.
+    """
+    if state is None:
+        return True
+
+    q_type = get_question_type(q)
+    if q_type in {"language", "validation"}:
+        return True
+
+    # Pas encore de focus -> on laisse passer (le focus sera fixé après réponse).
+    if state.focus_type is None:
+        return True
+
+    # Bloc en cours: forcer le même type tant qu'on n'a pas atteint le quota.
+    if state.focus_count < block_size:
+        return q_type == state.focus_type
+
+    # Quota atteint: interdire le même type, obligation de changer.
+    return q_type != state.focus_type
 
 
 def choose_best_question(candidates: List[dict], questions: List[Question], asked: Set[str], 
@@ -450,6 +487,13 @@ def choose_best_question(candidates: List[dict], questions: List[Question], aske
         if q.key in contradictions and contradictions[q.key] in asked:
             continue
         valid_questions.append(q)
+
+    # NOUVEAU: bloc de 5 questions par thème (actor/genre/director/...)
+    # Si la contrainte rend la liste vide, on relâche la contrainte pour éviter un blocage.
+    if state is not None:
+        focused_questions = [q for q in valid_questions if allowed_by_focus_block(state, q, block_size=5)]
+        if focused_questions:
+            valid_questions = focused_questions
     
     if not valid_questions:
         return None
@@ -2103,6 +2147,9 @@ class EngineState:
     top_streak_len: int
     consecutive_guesses: int  # NOUVEAU: compteur de guesses consécutifs
     recent_question_types: List[str]  # NOUVEAU: historique des types récents (max 5)
+    # NOUVEAU: gestion de blocs de questions par "thème" (type de question)
+    focus_type: Optional[str]  # ex: "actor", "genre", "director"...
+    focus_count: int  # nombre de questions (hors exceptions) dans le bloc courant
 
 
 def init_state(movies: List[dict]) -> EngineState:
@@ -2122,6 +2169,8 @@ def init_state(movies: List[dict]) -> EngineState:
         top_streak_len=0,
         consecutive_guesses=0,  # NOUVEAU
         recent_question_types=[],  # NOUVEAU
+        focus_type=None,  # NOUVEAU
+        focus_count=0,  # NOUVEAU
     )
 
 
@@ -2137,6 +2186,8 @@ def snapshot_state(state: EngineState) -> EngineState:
         top_streak_len=state.top_streak_len,
         consecutive_guesses=state.consecutive_guesses,  # NOUVEAU
         recent_question_types=list(state.recent_question_types),  # NOUVEAU
+        focus_type=state.focus_type,  # NOUVEAU
+        focus_count=state.focus_count,  # NOUVEAU
     )
 
 
@@ -2163,6 +2214,24 @@ def update_state_with_answer(
     Ajuste les scores et retire les films qui accumulent trop de contradictions.
     AMÉLIORÉ: Gestion fine des données manquantes + scoring différencié par type de question.
     """
+    # NOUVEAU: tracking centralisé (CLI + API) pour:
+    # - historique des types (diversité)
+    # - blocs de 5 questions par "thème" (actor/genre/director/...)
+    q_type = get_question_type(q)
+    state.recent_question_types.append(q_type)
+    if len(state.recent_question_types) > 10:
+        state.recent_question_types = state.recent_question_types[-10:]
+
+    # Les questions "language" / "validation" ne doivent pas casser le bloc.
+    if q_type not in {"language", "validation"}:
+        if state.focus_type is None:
+            state.focus_type = q_type
+            state.focus_count = 1
+        elif q_type == state.focus_type:
+            state.focus_count += 1
+        else:
+            state.focus_type = q_type
+            state.focus_count = 1
     # Identification des questions à élimination DURE
     hard_elimination_prefixes = [
         "franchise_",
@@ -2689,13 +2758,6 @@ def main() -> int:
             history.append(snapshot_state(state))
 
             state.asked.add(q.key)
-            
-            # NOUVEAU: Tracker le type de question pour diversité
-            q_type = get_question_type(q)
-            state.recent_question_types.append(q_type)
-            # Garder seulement les 10 dernières pour économiser mémoire
-            if len(state.recent_question_types) > 10:
-                state.recent_question_types = state.recent_question_types[-10:]
             
             # NOUVEAU: Si on répond "oui" à une question de langue, exclure TOUTES les autres
             if ans == "y" and q.key.startswith("language_"):
