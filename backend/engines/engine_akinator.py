@@ -1636,11 +1636,22 @@ def detect_dominant_decade(candidates: List[dict]) -> Optional[int]:
 def get_relevant_actors(dominant_language: Optional[str], dominant_decade: Optional[int]) -> List[str]:
     """Réduit le bruit: pour 'en' filtre par décennie, pour autres langues liste pays."""
     if dominant_language is None:
-        return ACTORS_BY_DECADE_EN.get(2020, [])
+        all_actors = []
+        for actors in ACTORS_BY_DECADE_EN.values():
+            all_actors.extend(actors)
+        all_actors.extend(ACTORS_FR)
+        all_actors.extend(ACTORS_ES)
+        all_actors.extend(ACTORS_DE)
+        all_actors.extend(ACTORS_JA)
+        all_actors.extend(ACTORS_IT)
+        return list(set(all_actors))
 
     if dominant_language == "en":
         if dominant_decade is None or dominant_decade < 1960:
-            return ACTORS_BY_DECADE_EN.get(2020, [])
+            all_en = []
+            for actors in ACTORS_BY_DECADE_EN.values():
+                all_en.extend(actors)
+            return list(set(all_en))
         if dominant_decade in ACTORS_BY_DECADE_EN:
             return ACTORS_BY_DECADE_EN[dominant_decade]
         available = sorted(ACTORS_BY_DECADE_EN.keys())
@@ -1658,7 +1669,7 @@ def get_relevant_actors(dominant_language: Optional[str], dominant_decade: Optio
     if dominant_language == "it":
         return ACTORS_IT
 
-    return ACTORS_BY_DECADE_EN.get(2020, [])
+    return []
 
 
 # Mapping acteurs célèbres → nationalité (code langue)
