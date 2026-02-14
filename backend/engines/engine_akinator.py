@@ -1354,6 +1354,8 @@ def build_top_validation_questions(
             if isinstance(actor, dict):
                 name = actor.get("name", "").strip()
                 if name:
+                    if name.lower() not in ACTOR_NATIONALITY:
+                        continue
                     key = f"validate_actor_{name.replace(' ', '_').lower()}"
                     if key not in asked:
                         text = f"Est-ce que {name} joue dedans ?"
@@ -1870,6 +1872,9 @@ def build_dynamic_questions(
         if n >= 50 and count < 2:
             continue
         
+        if actor.lower() not in ACTOR_NATIONALITY:
+            continue
+        
         # Filtre de langue
         if not should_include_actor(actor, dominant_language, relevant_actor_set):
             continue
@@ -2032,6 +2037,8 @@ def build_binary_disambiguation_questions(
                 if isinstance(actor_data, dict):
                     actor_name = actor_data.get("name", "").strip()
                     if not actor_name:
+                        continue
+                    if actor_name.lower() not in ACTOR_NATIONALITY:
                         continue
                     key = f"bin_actor_{actor_name.replace(' ', '_').lower()}"
                     if key not in asked and key not in added_keys:
