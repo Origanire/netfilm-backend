@@ -1275,29 +1275,6 @@ def default_questions(conn: sqlite3.Connection) -> List[Question]:
         Question("director_park_chan",  "Réalisé par Park Chan-wook ?",       pred_has_director(conn, "Park Chan-wook")),
 
         # ─────────────────────────────────────────────
-        # ACTEURS (sélection resserrée — les plus emblématiques)
-        # ─────────────────────────────────────────────
-        Question("actor_hanks",      "Tom Hanks joue-t-il dedans ?",          pred_actor_in_cast(conn, "Tom Hanks")),
-        Question("actor_dicaprio",   "Leonardo DiCaprio joue-t-il dedans ?",  pred_actor_in_cast(conn, "Leonardo DiCaprio")),
-        Question("actor_pitt",       "Brad Pitt joue-t-il dedans ?",          pred_actor_in_cast(conn, "Brad Pitt")),
-        Question("actor_de_niro",    "Robert De Niro joue-t-il dedans ?",     pred_actor_in_cast(conn, "Robert De Niro")),
-        Question("actor_pacino",     "Al Pacino joue-t-il dedans ?",          pred_actor_in_cast(conn, "Al Pacino")),
-        Question("actor_cruise",     "Tom Cruise joue-t-il dedans ?",         pred_actor_in_cast(conn, "Tom Cruise")),
-        Question("actor_will_smith", "Will Smith joue-t-il dedans ?",         pred_actor_in_cast(conn, "Will Smith")),
-        Question("actor_freeman",    "Morgan Freeman joue-t-il dedans ?",     pred_actor_in_cast(conn, "Morgan Freeman")),
-        Question("actor_sjackson",   "Samuel L. Jackson joue-t-il dedans ?",  pred_actor_in_cast(conn, "Samuel L. Jackson")),
-        Question("actor_schwarzenegger","Arnold Schwarzenegger joue-t-il dedans ?", pred_actor_in_cast(conn, "Arnold Schwarzenegger")),
-        Question("actor_ford",       "Harrison Ford joue-t-il dedans ?",      pred_actor_in_cast(conn, "Harrison Ford")),
-        Question("actor_johansson",  "Scarlett Johansson joue-t-elle dedans ?", pred_actor_in_cast(conn, "Scarlett Johansson")),
-        Question("actor_blanchett",  "Cate Blanchett joue-t-elle dedans ?",   pred_actor_in_cast(conn, "Cate Blanchett")),
-        Question("actor_depp",       "Johnny Depp joue-t-il dedans ?",        pred_actor_in_cast(conn, "Johnny Depp")),
-        Question("actor_reeves",     "Keanu Reeves joue-t-il dedans ?",       pred_actor_in_cast(conn, "Keanu Reeves")),
-        Question("actor_downey",     "Robert Downey Jr. joue-t-il dedans ?",  pred_actor_in_cast(conn, "Robert Downey Jr.")),
-        Question("actor_jackman",    "Hugh Jackman joue-t-il dedans ?",       pred_actor_in_cast(conn, "Hugh Jackman")),
-        Question("actor_radcliffe",  "Daniel Radcliffe joue-t-il dedans ?",   pred_actor_in_cast(conn, "Daniel Radcliffe")),
-        Question("actor_elijah_wood","Elijah Wood joue-t-il dedans ?",        pred_actor_in_cast(conn, "Elijah Wood")),
-
-        # ─────────────────────────────────────────────
         # JOKERS TITRE (dernier recours)
         # ─────────────────────────────────────────────
         Question("joker_title_a_d", "Le titre commence-t-il par A, B, C ou D ?",
